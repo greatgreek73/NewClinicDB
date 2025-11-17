@@ -9,18 +9,18 @@ Future<void> main() async {
     DeviceOrientation.portraitUp,
   ]);
 
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      systemNavigationBarColor: Colors.transparent,
-      systemNavigationBarDividerColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-      systemNavigationBarIconBrightness: Brightness.light,
-    ),
-  );
+  SystemChrome.setSystemUIOverlayStyle(kClinicOverlayStyle);
 
   runApp(const MyApp());
 }
+
+const SystemUiOverlayStyle kClinicOverlayStyle = SystemUiOverlayStyle(
+  statusBarColor: Colors.transparent,
+  systemNavigationBarColor: Colors.transparent,
+  systemNavigationBarDividerColor: Colors.transparent,
+  statusBarIconBrightness: Brightness.light,
+  systemNavigationBarIconBrightness: Brightness.light,
+);
 
 class MyApp extends StatelessWidget {
   const MyApp({Key? key}) : super(key: key);
@@ -52,14 +52,6 @@ class ClinicDashboardPage extends StatefulWidget {
 }
 
 class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
-  static const SystemUiOverlayStyle _overlayStyle = SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    systemNavigationBarColor: Colors.transparent,
-    systemNavigationBarDividerColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.light,
-    systemNavigationBarIconBrightness: Brightness.light,
-  );
-
   bool isToday = true;
 
   @override
@@ -73,7 +65,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
     );
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: _overlayStyle,
+      value: kClinicOverlayStyle,
       child: Scaffold(
         backgroundColor: AppColors.bg,
         body: Container(
@@ -104,30 +96,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
                         minHeight: constraints.maxHeight,
                       ),
                       child: Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(32),
-                          gradient: RadialGradient(
-                            center: Alignment.topCenter,
-                            radius: 1.4,
-                            colors: [
-                              AppColors.accentStrong.withOpacity(0.35),
-                              AppColors.bgMid,
-                              AppColors.bg,
-                            ],
-                            stops: const [0.0, 0.4, 1.0],
-                          ),
-                          border: Border.all(
-                            color: Colors.white.withOpacity(0.05),
-                            width: 1,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.95),
-                              blurRadius: 140,
-                              spreadRadius: 50,
-                            ),
-                          ],
-                        ),
+                        decoration: buildPrimaryPanelDecoration(),
                         child: LayoutBuilder(
                           builder: (context, innerConstraints) {
                             if (innerConstraints.maxWidth > 900) {
@@ -741,66 +710,49 @@ class SearchPage extends StatelessWidget {
       bottom: 24 + viewPadding.bottom,
     );
 
-    return Scaffold(
-      backgroundColor: AppColors.bg,
-      body: Container(
-        width: double.infinity,
-        height: double.infinity,
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment.topCenter,
-            radius: 1.4,
-            colors: [
-              AppColors.accentStrong.withOpacity(0.25),
-              AppColors.bgMid,
-              AppColors.bg,
-            ],
-            stops: const [0.0, 0.45, 1.0],
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: kClinicOverlayStyle,
+      child: Scaffold(
+        backgroundColor: AppColors.bg,
+        body: Container(
+          width: double.infinity,
+          height: double.infinity,
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment.topCenter,
+              radius: 1.4,
+              colors: [
+                AppColors.accentStrong.withOpacity(0.25),
+                AppColors.bgMid,
+                AppColors.bg,
+              ],
+              stops: const [0.0, 0.45, 1.0],
+            ),
           ),
-        ),
-        child: Padding(
-          padding: contentPadding,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              return SingleChildScrollView(
-                child: Align(
-                  alignment: Alignment.center,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: 1100,
-                      minHeight: constraints.maxHeight,
-                    ),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(32),
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            AppColors.surface.withOpacity(0.98),
-                            AppColors.surfaceDark.withOpacity(0.96),
-                          ],
-                        ),
-                        border: Border.all(
-                          color: Colors.white.withOpacity(0.06),
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.85),
-                            blurRadius: 120,
-                            spreadRadius: 40,
-                          ),
-                        ],
+          child: Padding(
+            padding: contentPadding,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  child: Align(
+                    alignment: Alignment.center,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: 1100,
+                        minHeight: constraints.maxHeight,
                       ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(36),
-                        child: _SearchContent(),
+                      child: Container(
+                        decoration: buildPrimaryPanelDecoration(),
+                        child: Padding(
+                          padding: const EdgeInsets.all(36),
+                          child: _SearchContent(),
+                        ),
                       ),
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
         ),
       ),
@@ -870,13 +822,14 @@ class _SearchContent extends StatelessWidget {
               },
               style: TextButton.styleFrom(
                 foregroundColor: AppColors.textPrimary,
+                backgroundColor: Colors.white.withOpacity(0.06),
                 padding:
                     const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(999),
-                  side: BorderSide(
-                    color: Colors.white.withOpacity(0.2),
-                  ),
+                ),
+                side: BorderSide(
+                  color: Colors.white.withOpacity(0.2),
                 ),
               ),
               icon: const Icon(Icons.arrow_back),
@@ -905,28 +858,39 @@ class _SearchContent extends StatelessWidget {
             'Notes',
             'Upcoming',
             'New leads',
-          ]
-              .map(
-                (label) => Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.06),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(
-                      color: Colors.white.withOpacity(0.12),
-                    ),
-                  ),
-                  child: Text(
-                    label,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
+          ].map(
+            (label) => Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    AppColors.surface.withOpacity(0.95),
+                    AppColors.surfaceDark.withOpacity(0.98),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
-              )
-              .toList(),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: Colors.white.withOpacity(0.12),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.35),
+                    blurRadius: 20,
+                    spreadRadius: 6,
+                  ),
+                ],
+              ),
+              child: Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+          ).toList(),
         ),
         const SizedBox(height: 32),
         Row(
@@ -944,15 +908,23 @@ class _SearchContent extends StatelessWidget {
               padding:
                   const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.08),
+                gradient: LinearGradient(
+                  colors: [
+                    AppColors.accent.withOpacity(0.25),
+                    AppColors.accentStrong.withOpacity(0.35),
+                  ],
+                ),
                 borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: AppColors.accentSoft.withOpacity(0.6),
+                ),
               ),
               child: Text(
                 '${results.length} suggestions',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
+                  color: AppColors.bg,
                 ),
               ),
             ),
@@ -981,13 +953,13 @@ class _SearchField extends StatelessWidget {
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(20),
           borderSide: BorderSide(
-            color: Colors.white.withOpacity(0.15),
+            color: AppColors.textMuted.withOpacity(0.25),
           ),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(20),
           borderSide: BorderSide(
-            color: Colors.white.withOpacity(0.1),
+            color: AppColors.textMuted.withOpacity(0.2),
           ),
         ),
         focusedBorder: OutlineInputBorder(
@@ -1028,11 +1000,25 @@ class _SearchResultTile extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: AppColors.surfaceDark.withOpacity(0.95),
+        gradient: LinearGradient(
+          colors: [
+            AppColors.surfaceDark.withOpacity(0.98),
+            AppColors.surface.withOpacity(0.95),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
         borderRadius: BorderRadius.circular(24),
         border: Border.all(
           color: Colors.white.withOpacity(0.08),
         ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.5),
+            blurRadius: 40,
+            spreadRadius: 12,
+          ),
+        ],
       ),
       child: Row(
         children: [
@@ -1041,19 +1027,19 @@ class _SearchResultTile extends StatelessWidget {
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: [
-                  AppColors.bgMid,
-                  AppColors.bg,
+                  AppColors.accentStrong.withOpacity(0.9),
+                  AppColors.accent.withOpacity(0.9),
                 ],
               ),
               borderRadius: BorderRadius.circular(18),
               border: Border.all(
-                color: Colors.white.withOpacity(0.12),
+                color: Colors.white.withOpacity(0.2),
               ),
             ),
             child: Icon(
               result.icon,
               size: 24,
-              color: AppColors.textPrimary,
+              color: AppColors.bg,
             ),
           ),
           const SizedBox(width: 16),
@@ -1092,6 +1078,33 @@ class _SearchResultTile extends StatelessWidget {
       ),
     );
   }
+}
+
+BoxDecoration buildPrimaryPanelDecoration() {
+  return BoxDecoration(
+    borderRadius: BorderRadius.circular(32),
+    gradient: RadialGradient(
+      center: Alignment.topCenter,
+      radius: 1.4,
+      colors: [
+        AppColors.accentStrong.withOpacity(0.35),
+        AppColors.bgMid,
+        AppColors.bg,
+      ],
+      stops: const [0.0, 0.4, 1.0],
+    ),
+    border: Border.all(
+      color: Colors.white.withOpacity(0.05),
+      width: 1,
+    ),
+    boxShadow: [
+      BoxShadow(
+        color: Colors.black.withOpacity(0.95),
+        blurRadius: 140,
+        spreadRadius: 50,
+      ),
+    ],
+  );
 }
 
 class AppColors {
