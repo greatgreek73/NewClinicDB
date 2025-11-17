@@ -38,6 +38,8 @@ class MyApp extends StatelessWidget {
       ),
       routes: {
         SearchPage.routeName: (context) => const SearchPage(),
+        AddPatientPage.routeName: (context) => const AddPatientPage(),
+        PatientDetailsPage.routeName: (context) => const PatientDetailsPage(),
       },
       home: const ClinicDashboardPage(),
     );
@@ -178,26 +180,59 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
         ),
         const SizedBox(height: 24),
         _buildPeriodToggle(),
-        const SizedBox(height: 16),
-        _buildSearchButton(context),
+        const SizedBox(height: 20),
+        _buildPrimaryActions(context),
         const SizedBox(height: 24),
         _buildStatsGrid(),
       ],
     );
   }
 
-  Widget _buildSearchButton(BuildContext context) {
+  Widget _buildPrimaryActions(BuildContext context) {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      children: [
+        _buildActionButton(
+          context: context,
+          label: 'Search',
+          icon: Icons.search_rounded,
+          onPressed: () =>
+              Navigator.of(context).pushNamed(SearchPage.routeName),
+        ),
+        _buildActionButton(
+          context: context,
+          label: 'Add patient',
+          icon: Icons.person_add_alt_1_rounded,
+          onPressed: () =>
+              Navigator.of(context).pushNamed(AddPatientPage.routeName),
+        ),
+        _buildActionButton(
+          context: context,
+          label: 'Patient profile',
+          icon: Icons.badge_outlined,
+          onPressed: () =>
+              Navigator.of(context).pushNamed(PatientDetailsPage.routeName),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActionButton({
+    required BuildContext context,
+    required String label,
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) {
     return SizedBox(
       height: 48,
       child: ElevatedButton.icon(
-        onPressed: () {
-          Navigator.of(context).pushNamed(SearchPage.routeName);
-        },
+        onPressed: onPressed,
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.white.withOpacity(0.08),
           foregroundColor: AppColors.textPrimary,
           elevation: 0,
-          padding: const EdgeInsets.symmetric(horizontal: 28),
+          padding: const EdgeInsets.symmetric(horizontal: 24),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(999),
             side: BorderSide(
@@ -205,11 +240,11 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
             ),
           ),
         ),
-        icon: const Icon(Icons.search_rounded),
-        label: const Text(
-          'Go to search',
-          style: TextStyle(
-            fontSize: 15,
+        icon: Icon(icon, size: 20),
+        label: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 14,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -702,60 +737,37 @@ class SearchPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final viewPadding = MediaQuery.of(context).viewPadding;
-    final contentPadding = EdgeInsets.only(
-      left: 24 + viewPadding.left,
-      right: 24 + viewPadding.right,
-      top: 24 + viewPadding.top,
-      bottom: 24 + viewPadding.bottom,
+    return PrimaryPageScaffold(
+      maxWidth: 1100,
+      child: const _SearchContent(),
     );
+  }
+}
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: kClinicOverlayStyle,
-      child: Scaffold(
-        backgroundColor: AppColors.bg,
-        body: Container(
-          width: double.infinity,
-          height: double.infinity,
-          decoration: BoxDecoration(
-            gradient: RadialGradient(
-              center: Alignment.topCenter,
-              radius: 1.4,
-              colors: [
-                AppColors.accentStrong.withOpacity(0.25),
-                AppColors.bgMid,
-                AppColors.bg,
-              ],
-              stops: const [0.0, 0.45, 1.0],
-            ),
-          ),
-          child: Padding(
-            padding: contentPadding,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return SingleChildScrollView(
-                  child: Align(
-                    alignment: Alignment.center,
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: 1100,
-                        minHeight: constraints.maxHeight,
-                      ),
-                      child: Container(
-                        decoration: buildPrimaryPanelDecoration(),
-                        child: Padding(
-                          padding: const EdgeInsets.all(36),
-                          child: _SearchContent(),
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-      ),
+class AddPatientPage extends StatelessWidget {
+  static const routeName = '/add-patient';
+
+  const AddPatientPage({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return PrimaryPageScaffold(
+      maxWidth: 960,
+      child: const _AddPatientContent(),
+    );
+  }
+}
+
+class PatientDetailsPage extends StatelessWidget {
+  static const routeName = '/patient-details';
+
+  const PatientDetailsPage({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return PrimaryPageScaffold(
+      maxWidth: 1100,
+      child: const _PatientDetailsContent(),
     );
   }
 }
@@ -764,7 +776,7 @@ class _SearchContent extends StatelessWidget {
   final List<_SearchResult> results = const [
     _SearchResult(
       title: 'Anna Petrova',
-      subtitle: 'Patient • Last visit 14 Nov · Hygiene',
+      subtitle: 'Patient · Last visit 14 Nov · Hygiene',
       meta: '4 upcoming appointments',
       icon: Icons.person_outline,
     ),
@@ -789,53 +801,12 @@ class _SearchContent extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Search the clinic knowledge base',
-                    style: TextStyle(
-                      fontSize: 30,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: -0.4,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Find patients, procedures, invoices or documents instantly.',
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: AppColors.textMuted.withOpacity(0.9),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 16),
-            TextButton.icon(
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-              style: TextButton.styleFrom(
-                foregroundColor: AppColors.textPrimary,
-                backgroundColor: Colors.white.withOpacity(0.06),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                side: BorderSide(
-                  color: Colors.white.withOpacity(0.2),
-                ),
-              ),
-              icon: const Icon(Icons.arrow_back),
-              label: const Text('Back to dashboard'),
-            ),
-          ],
+        _PageHeader(
+          title: 'Search the clinic knowledge base',
+          subtitle:
+              'Find patients, procedures, invoices or documents instantly.',
+          actionLabel: 'Back to dashboard',
+          onAction: () => Navigator.of(context).pop(),
         ),
         const SizedBox(height: 32),
         _SearchField(),
@@ -933,6 +904,458 @@ class _SearchContent extends StatelessWidget {
         const SizedBox(height: 20),
         ...results.map((r) => _SearchResultTile(result: r)),
       ],
+    );
+  }
+}
+
+class _AddPatientContent extends StatelessWidget {
+  const _AddPatientContent({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth > 700;
+
+        final leftCard = _buildFormCard(
+          title: 'Patient details',
+          children: [
+            TextField(decoration: buildFormInputDecoration('Full name')),
+            const SizedBox(height: 16),
+            TextField(
+              decoration:
+                  buildFormInputDecoration('Date of birth', hint: 'DD/MM/YYYY'),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              decoration: buildFormInputDecoration('Preferred doctor'),
+            ),
+            const SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              decoration: buildFormInputDecoration('Primary concern'),
+              dropdownColor: AppColors.surfaceDark,
+              style: const TextStyle(color: AppColors.textPrimary),
+              items: const [
+                DropdownMenuItem(value: 'Implant', child: Text('Implants')),
+                DropdownMenuItem(value: 'Hygiene', child: Text('Hygiene')),
+                DropdownMenuItem(value: 'Whitening', child: Text('Whitening')),
+              ],
+              onChanged: (_) {},
+            ),
+          ],
+        );
+
+        final rightCard = _buildFormCard(
+          title: 'Contact & notes',
+          children: [
+            TextField(decoration: buildFormInputDecoration('Phone number')),
+            const SizedBox(height: 16),
+            TextField(decoration: buildFormInputDecoration('Email')),
+            const SizedBox(height: 16),
+            TextField(
+              maxLines: 4,
+              decoration: buildFormInputDecoration(
+                'Notes for care team',
+                hint: 'Allergies, previous procedures, reminders...',
+              ),
+            ),
+          ],
+        );
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _PageHeader(
+              title: 'Add new patient',
+              subtitle: 'Create a profile and assign the first visit to keep the team aligned.',
+              actionLabel: 'Back to dashboard',
+              onAction: () => Navigator.of(context).pop(),
+            ),
+            const SizedBox(height: 28),
+            if (isWide)
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: leftCard),
+                  const SizedBox(width: 24),
+                  Expanded(child: rightCard),
+                ],
+              )
+            else ...[
+              leftCard,
+              const SizedBox(height: 24),
+              rightCard,
+            ],
+            const SizedBox(height: 32),
+            Align(
+              alignment: Alignment.centerRight,
+              child: ElevatedButton.icon(
+                onPressed: () {},
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.accentStrong,
+                  foregroundColor: AppColors.bg,
+                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+                icon: const Icon(Icons.save_rounded),
+                label: const Text(
+                  'Save patient',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildFormCard({
+    required String title,
+    required List<Widget> children,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: buildSurfaceCardDecoration(glow: true),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title.toUpperCase(),
+            style: TextStyle(
+              fontSize: 12,
+              letterSpacing: 1.5,
+              color: AppColors.textMuted.withOpacity(0.9),
+            ),
+          ),
+          const SizedBox(height: 16),
+          ...children,
+        ],
+      ),
+    );
+  }
+}
+
+class _PatientDetailsContent extends StatelessWidget {
+  const _PatientDetailsContent({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth > 820;
+
+        final infoCard = Expanded(
+          child: Container(
+            padding: const EdgeInsets.all(24),
+            decoration: buildSurfaceCardDecoration(glow: true),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 32,
+                      backgroundColor: AppColors.accent.withOpacity(0.2),
+                      child: const Icon(
+                        Icons.person,
+                        size: 32,
+                        color: AppColors.accent,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Anna Petrova',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Member since 2019 · VIP Plan',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: AppColors.textMuted.withOpacity(0.9),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    _buildInfoChip('Last visit', '14 Nov · Hygiene'),
+                    const SizedBox(width: 12),
+                    _buildInfoChip('Assigned doctor', 'Dr. Emily Ross'),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                Divider(color: Colors.white.withOpacity(0.1)),
+                const SizedBox(height: 20),
+                Text(
+                  'Contact & preferences',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textMuted.withOpacity(0.9),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _buildContactRow(Icons.phone, '+1 202 555 0124'),
+                const SizedBox(height: 8),
+                _buildContactRow(Icons.email_outlined, 'anna.petrova@email.com'),
+                const SizedBox(height: 8),
+                _buildContactRow(Icons.location_on_outlined, 'Downtown branch · Room 2'),
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: buildSurfaceCardDecoration(),
+                  child: const Text(
+                    'Notes: Prefers morning appointments. Allergic to penicillin. Interested in implant upgrade in Q1.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: AppColors.textPrimary,
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+
+        final scheduleCard = Expanded(
+          child: Container(
+            padding: const EdgeInsets.all(24),
+            decoration: buildSurfaceCardDecoration(),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Upcoming treatments',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                ...[
+                  _AppointmentRow(
+                    date: '20 Nov',
+                    title: 'Implant planning session',
+                    meta: 'Dr. Emily Ross · Room 4',
+                    highlight: true,
+                  ),
+                  _AppointmentRow(
+                    date: '04 Dec',
+                    title: 'Crown placement & hygiene',
+                    meta: 'Dr. Gomez · Room 1',
+                  ),
+                  _AppointmentRow(
+                    date: '11 Jan',
+                    title: 'Follow-up & whitening',
+                    meta: 'Dr. Emily Ross · Room 2',
+                  ),
+                ],
+                const SizedBox(height: 24),
+                ElevatedButton.icon(
+                  onPressed: () {},
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white.withOpacity(0.08),
+                    foregroundColor: AppColors.textPrimary,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 22,
+                      vertical: 14,
+                    ),
+                  ),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Schedule new appointment'),
+                ),
+              ],
+            ),
+          ),
+        );
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _PageHeader(
+              title: 'Patient overview',
+              subtitle: 'Track history, update notes and schedule new visits for your patients.',
+              actionLabel: 'Back to dashboard',
+              onAction: () => Navigator.of(context).pop(),
+            ),
+            const SizedBox(height: 28),
+            if (isWide)
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  infoCard,
+                  const SizedBox(width: 24),
+                  scheduleCard,
+                ],
+              )
+            else ...[
+              infoCard,
+              const SizedBox(height: 24),
+              scheduleCard,
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildInfoChip(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: buildSurfaceCardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              fontSize: 10,
+              letterSpacing: 1.5,
+              color: AppColors.textMuted.withOpacity(0.8),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContactRow(IconData icon, String value) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: AppColors.textMuted),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(
+              fontSize: 13,
+              color: AppColors.textPrimary,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AppointmentRow extends StatelessWidget {
+  final String date;
+  final String title;
+  final String meta;
+  final bool highlight;
+
+  const _AppointmentRow({
+    Key? key,
+    required this.date,
+    required this.title,
+    required this.meta,
+    this.highlight = false,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: buildSurfaceCardDecoration(glow: highlight),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  AppColors.bgMid,
+                  AppColors.bg,
+                ],
+              ),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.2),
+              ),
+            ),
+            child: Text(
+              date,
+              style: const TextStyle(
+                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary,
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  meta,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textMuted.withOpacity(0.9),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (highlight)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    AppColors.accentStrong,
+                    AppColors.accent,
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: const Text(
+                'High priority',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: AppColors.bg,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -1080,6 +1503,78 @@ class _SearchResultTile extends StatelessWidget {
   }
 }
 
+class PrimaryPageScaffold extends StatelessWidget {
+  final Widget child;
+  final double maxWidth;
+  final EdgeInsets padding;
+
+  const PrimaryPageScaffold({
+    Key? key,
+    required this.child,
+    this.maxWidth = 1100,
+    this.padding = const EdgeInsets.all(36),
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final viewPadding = MediaQuery.of(context).viewPadding;
+    final contentPadding = EdgeInsets.only(
+      left: 24 + viewPadding.left,
+      right: 24 + viewPadding.right,
+      top: 24 + viewPadding.top,
+      bottom: 24 + viewPadding.bottom,
+    );
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: kClinicOverlayStyle,
+      child: Scaffold(
+        backgroundColor: AppColors.bg,
+        body: Container(
+          width: double.infinity,
+          height: double.infinity,
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment.topCenter,
+              radius: 1.4,
+              colors: [
+                AppColors.accentStrong.withOpacity(0.25),
+                AppColors.bgMid,
+                AppColors.bg,
+              ],
+              stops: const [0.0, 0.45, 1.0],
+            ),
+          ),
+          child: Padding(
+            padding: contentPadding,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  child: Align(
+                    alignment: Alignment.center,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: maxWidth,
+                        minHeight: constraints.maxHeight,
+                      ),
+                      child: Container(
+                        decoration: buildPrimaryPanelDecoration(),
+                        child: Padding(
+                          padding: padding,
+                          child: child,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 BoxDecoration buildPrimaryPanelDecoration() {
   return BoxDecoration(
     borderRadius: BorderRadius.circular(32),
@@ -1107,6 +1602,139 @@ BoxDecoration buildPrimaryPanelDecoration() {
   );
 }
 
+BoxDecoration buildSurfaceCardDecoration({bool glow = false}) {
+  return BoxDecoration(
+    gradient: LinearGradient(
+      colors: [
+        AppColors.surface.withOpacity(glow ? 0.98 : 0.93),
+        AppColors.surfaceDark.withOpacity(0.96),
+      ],
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+    ),
+    borderRadius: BorderRadius.circular(28),
+    border: Border.all(
+      color: Colors.white.withOpacity(glow ? 0.14 : 0.08),
+    ),
+    boxShadow: glow
+        ? [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.5),
+              blurRadius: 50,
+              spreadRadius: 18,
+            ),
+          ]
+        : [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.35),
+              blurRadius: 32,
+              spreadRadius: 10,
+            ),
+          ],
+  );
+}
+
+InputDecoration buildFormInputDecoration(String label, {String? hint}) {
+  return InputDecoration(
+    labelText: label,
+    hintText: hint,
+    labelStyle: TextStyle(
+      color: AppColors.textMuted.withOpacity(0.9),
+    ),
+    hintStyle: TextStyle(
+      color: AppColors.textMuted.withOpacity(0.6),
+    ),
+    filled: true,
+    fillColor: AppColors.surface.withOpacity(0.9),
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(18),
+      borderSide: BorderSide(
+        color: Colors.white.withOpacity(0.12),
+      ),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(18),
+      borderSide: BorderSide(
+        color: Colors.white.withOpacity(0.08),
+      ),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(18),
+      borderSide: BorderSide(
+        color: AppColors.accent.withOpacity(0.8),
+      ),
+    ),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+  );
+}
+
+class _PageHeader extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  const _PageHeader({
+    Key? key,
+    required this.title,
+    required this.subtitle,
+    this.actionLabel,
+    this.onAction,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 30,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                  letterSpacing: -0.4,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  fontSize: 15,
+                  color: AppColors.textMuted.withOpacity(0.9),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (actionLabel != null && onAction != null) ...[
+          const SizedBox(width: 16),
+          TextButton.icon(
+            onPressed: onAction,
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.textPrimary,
+              backgroundColor: Colors.white.withOpacity(0.06),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(999),
+              ),
+              side: BorderSide(
+                color: Colors.white.withOpacity(0.2),
+              ),
+            ),
+            icon: const Icon(Icons.arrow_back),
+            label: Text(actionLabel!),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 class AppColors {
   static const Color bg = Color(0xFF050308);
   static const Color bgMid = Color(0xFF10060B);
@@ -1121,4 +1749,5 @@ class AppColors {
   static const Color textPrimary = Color(0xFFFDFDFD);
   static const Color textMuted = Color(0xFFB9A8C0);
 }
+
 
