@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1000076913874",
+    "project_id": "clinicdb-9ec3f",
+    "storage_bucket": "clinicdb-9ec3f.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1000076913874:android:6747e849117b195e08910b",
+        "android_client_info": {
+          "package_name": "com.example.clinicdb"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAGn-koBTYH5WESso5EeP9ktpU375WIxwE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

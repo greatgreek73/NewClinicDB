@@ -1,5 +1,8 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'firebase_options.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -10,6 +13,10 @@ Future<void> main() async {
   ]);
 
   SystemChrome.setSystemUIOverlayStyle(kClinicOverlayStyle);
+
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
 
   runApp(const MyApp());
 }
@@ -55,6 +62,81 @@ class ClinicDashboardPage extends StatefulWidget {
 
 class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
   bool isToday = true;
+  bool _isLoadingPatients = false;
+  int? _todayPatientsCount;
+  String? _patientsError;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTodayPatientsCount();
+  }
+
+  Future<void> _loadTodayPatientsCount() async {
+    setState(() {
+      _isLoadingPatients = true;
+      _patientsError = null;
+    });
+
+    try {
+      final now = DateTime.now();
+      final startOfDay = DateTime(now.year, now.month, now.day);
+      final endOfDay = startOfDay.add(const Duration(days: 1));
+
+      final query = FirebaseFirestore.instance
+          .collection('treatments')
+          .where(
+            'date',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay),
+          )
+          .where(
+            'date',
+            isLessThan: Timestamp.fromDate(endOfDay),
+          );
+
+      final snapshot = await query.get();
+
+      final uniquePatients = <String>{};
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final rawId = data['patientId'] ?? data['patient_id'];
+        final id = rawId?.toString().trim();
+        uniquePatients.add(id?.isNotEmpty == true ? id! : doc.id);
+      }
+
+      setState(() {
+        _todayPatientsCount = uniquePatients.length;
+        _patientsError = null;
+      });
+    } catch (error) {
+      setState(() {
+        _patientsError = 'Unable to load';
+        _todayPatientsCount = null;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingPatients = false;
+        });
+      }
+    }
+  }
+
+  String get _patientsCardValue {
+    if (_isLoadingPatients) return '…';
+    if (_patientsError != null) return '--';
+    return (_todayPatientsCount ?? 0).toString();
+  }
+
+  String get _patientsCardSubtitle {
+    if (_isLoadingPatients) {
+      return 'Loading today\'s data…';
+    }
+    if (_patientsError != null) {
+      return 'Check appointments data';
+    }
+    return 'Any treatment logged today';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -314,8 +396,8 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
       children: [
         _buildStatCard(
           title: 'Patients today',
-          value: '18',
-          subtitle: '6 new patients',
+          value: _patientsCardValue,
+          subtitle: _patientsCardSubtitle,
           highlighted: true,
         ),
         _buildStatCard(
