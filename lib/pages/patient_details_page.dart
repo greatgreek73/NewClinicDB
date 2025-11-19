@@ -232,6 +232,8 @@ class _PatientDetailsContent extends StatelessWidget {
                   const SizedBox(height: 24),
                   scheduleCard,
                 ],
+                const SizedBox(height: 28),
+                const _DentalChartSection(),
               ],
             );
           },
@@ -293,6 +295,267 @@ class _PatientDetailsContent extends StatelessWidget {
     if (last.isNotEmpty) return last;
     if (first.isNotEmpty) return first;
     return fallbackName;
+  }
+}
+
+class _DentalChartSection extends StatelessWidget {
+  const _DentalChartSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final themeText = Theme.of(context).textTheme;
+    final upperJaw = [
+      '18',
+      '17',
+      '16',
+      '15',
+      '14',
+      '13',
+      '12',
+      '11',
+      '21',
+      '22',
+      '23',
+      '24',
+      '25',
+      '26',
+      '27',
+      '28',
+    ];
+    final lowerJaw = [
+      '48',
+      '47',
+      '46',
+      '45',
+      '44',
+      '43',
+      '42',
+      '41',
+      '31',
+      '32',
+      '33',
+      '34',
+      '35',
+      '36',
+      '37',
+      '38',
+    ];
+
+    final Map<String, _ToothCondition> plan = {
+      '26': _ToothCondition.planned,
+      '13': _ToothCondition.treated,
+      '46': _ToothCondition.inProgress,
+      '37': _ToothCondition.inProgress,
+      '31': _ToothCondition.treated,
+    };
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(24),
+      decoration: buildSurfaceCardDecoration(glow: true),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Dental chart',
+                    style: themeText.titleMedium?.copyWith(
+                      color: AppColors.textPrimary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Tap a tooth to document treatment progress.',
+                    style: themeText.bodySmall?.copyWith(
+                      color: AppColors.textMuted.withOpacity(0.9),
+                    ),
+                  ),
+                ],
+              ),
+              _DentalLegend(),
+            ],
+          ),
+          const SizedBox(height: 24),
+          _ToothRow(labels: upperJaw, plan: plan),
+          const SizedBox(height: 16),
+          _ToothRow(labels: lowerJaw, plan: plan, inverted: true),
+        ],
+      ),
+    );
+  }
+}
+
+class _ToothRow extends StatelessWidget {
+  final List<String> labels;
+  final Map<String, _ToothCondition> plan;
+  final bool inverted;
+
+  const _ToothRow({
+    required this.labels,
+    required this.plan,
+    this.inverted = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children:
+          labels
+              .map(
+                (label) => Expanded(
+                  child: _ToothTile(
+                    label: label,
+                    condition: plan[label] ?? _ToothCondition.healthy,
+                    inverted: inverted,
+                  ),
+                ),
+              )
+              .toList(),
+    );
+  }
+}
+
+class _DentalLegend extends StatelessWidget {
+  const _DentalLegend();
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = [
+      _LegendEntry(color: _ToothCondition.healthy.color, label: 'Healthy'),
+      _LegendEntry(color: _ToothCondition.treated.color, label: 'Treated'),
+      _LegendEntry(
+        color: _ToothCondition.inProgress.color,
+        label: 'In progress',
+      ),
+      _LegendEntry(color: _ToothCondition.planned.color, label: 'Planned'),
+    ];
+
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      children:
+          entries
+              .map(
+                (entry) => Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 14,
+                      height: 14,
+                      decoration: BoxDecoration(
+                        color: entry.color,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      entry.label,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textMuted.withOpacity(0.9),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+              .toList(),
+    );
+  }
+}
+
+class _LegendEntry {
+  final Color color;
+  final String label;
+
+  _LegendEntry({required this.color, required this.label});
+}
+
+class _ToothTile extends StatelessWidget {
+  final String label;
+  final _ToothCondition condition;
+  final bool inverted;
+
+  const _ToothTile({
+    required this.label,
+    required this.condition,
+    required this.inverted,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        if (inverted) _ToothShape(condition: condition),
+        const SizedBox(height: 8),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.4,
+            color: AppColors.textMuted.withOpacity(0.9),
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (!inverted) _ToothShape(condition: condition),
+      ],
+    );
+  }
+}
+
+class _ToothShape extends StatelessWidget {
+  final _ToothCondition condition;
+
+  const _ToothShape({required this.condition});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 32,
+      height: 48,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            condition.color.withOpacity(0.85),
+            condition.color.withOpacity(0.35),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.2)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.25),
+            blurRadius: 14,
+            spreadRadius: 4,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+enum _ToothCondition { healthy, treated, inProgress, planned }
+
+extension on _ToothCondition {
+  Color get color {
+    switch (this) {
+      case _ToothCondition.healthy:
+        return AppColors.surfaceDark.withOpacity(0.9);
+      case _ToothCondition.treated:
+        return AppColors.accent.withOpacity(0.9);
+      case _ToothCondition.inProgress:
+        return Colors.pinkAccent.withOpacity(0.9);
+      case _ToothCondition.planned:
+        return Colors.tealAccent.withOpacity(0.9);
+    }
   }
 }
 
