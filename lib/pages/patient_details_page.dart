@@ -1,6 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../models/tooth_condition.dart';
+import '../models/treatment_palette.dart';
+import '../services/dental_chart_repository.dart';
 import '../theme/app_colors.dart';
 import '../utils/decorations.dart';
 import '../widgets/page_header.dart';
@@ -30,15 +33,38 @@ class PatientDetailsPage extends StatelessWidget {
   }
 }
 
-class _PatientDetailsContent extends StatelessWidget {
+class _PatientDetailsContent extends StatefulWidget {
   final PatientDetailsArgs? args;
 
   const _PatientDetailsContent({Key? key, this.args}) : super(key: key);
 
   @override
+  State<_PatientDetailsContent> createState() => _PatientDetailsContentState();
+}
+
+class _PatientDetailsContentState extends State<_PatientDetailsContent> {
+  final DentalChartRepository _chartRepository = DentalChartRepository();
+
+  ToothCondition? _selectedCondition;
+  Stream<Map<String, ToothCondition>>? _chartStream;
+  Stream<Map<String, List<String>>>? _treatmentsStream;
+  final TreatmentPalette _treatmentPalette = TreatmentPalette();
+  String? _selectedTreatmentType;
+
+  @override
+  void initState() {
+    super.initState();
+    final patientId = widget.args?.patientId;
+    if (patientId != null) {
+      _chartStream = _chartRepository.watchChart(patientId);
+      _treatmentsStream = _chartRepository.watchTreatmentsByTooth(patientId);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final patientId = args?.patientId;
-    final fallbackName = args?.displayName ?? 'Patient';
+    final patientId = widget.args?.patientId;
+    final fallbackName = widget.args?.displayName ?? 'Patient';
 
     return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       future:
@@ -233,13 +259,137 @@ class _PatientDetailsContent extends StatelessWidget {
                   scheduleCard,
                 ],
                 const SizedBox(height: 28),
-                const _DentalChartSection(),
+                _buildDentalChart(patientId),
               ],
             );
           },
         );
       },
     );
+  }
+
+  Widget _buildDentalChart(String? patientId) {
+    if (patientId == null) {
+      final plan = _buildFallbackTreatmentPlan();
+      return _DentalChartSection(
+        plan: plan,
+        selectedCondition: _selectedCondition,
+        availableConditions: _availableConditionsFrom(plan),
+        onConditionChange: _handleConditionChange,
+        readOnly: true,
+        treatmentsByTooth: const {},
+        treatmentTypes: const [],
+        palette: _treatmentPalette,
+      );
+    }
+
+    _chartStream ??= _chartRepository.watchChart(patientId);
+    final chartStream = _chartStream!;
+
+    _treatmentsStream ??= _chartRepository.watchTreatmentsByTooth(patientId);
+    final treatmentsStream = _treatmentsStream!;
+
+    return StreamBuilder<Map<String, List<String>>>(
+      stream: treatmentsStream,
+      builder: (context, treatmentSnapshot) {
+        final treatmentsByTooth =
+            treatmentSnapshot.data ?? <String, List<String>>{};
+        final treatmentTypes = _mergeTreatmentTypes(treatmentsByTooth);
+
+        return StreamBuilder<Map<String, ToothCondition>>(
+          stream: chartStream,
+          builder: (context, snapshot) {
+            final plan = snapshot.data ?? <String, ToothCondition>{};
+            final available = _availableConditionsFrom(plan);
+            final isLoading =
+                snapshot.connectionState == ConnectionState.waiting;
+            final errorMessage =
+                snapshot.hasError
+                    ? snapshot.error?.toString() ?? 'Unable to load dental chart'
+                    : null;
+
+            return _DentalChartSection(
+              plan: plan,
+              selectedCondition: _selectedCondition,
+              availableConditions: available,
+              onConditionChange: _handleConditionChange,
+              onToothTap: (tooth) => _handleToothTap(patientId, tooth),
+              isLoading: isLoading,
+              error: errorMessage,
+              treatmentsByTooth: treatmentsByTooth,
+              treatmentTypes: treatmentTypes,
+              selectedTreatmentType: _selectedTreatmentType,
+              onTreatmentTypeChange: _handleTreatmentTypeChange,
+              palette: _treatmentPalette,
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _handleConditionChange(ToothCondition? condition) {
+    setState(() {
+      _selectedCondition = condition;
+    });
+  }
+
+  void _handleTreatmentTypeChange(String? type) {
+    setState(() {
+      _selectedTreatmentType = type == _selectedTreatmentType ? null : type;
+    });
+  }
+
+  Future<void> _handleToothTap(String patientId, String tooth) async {
+    final condition = _selectedCondition;
+    if (condition == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Select a status first to apply to the tooth.'),
+        ),
+      );
+      return;
+    }
+
+    try {
+      await _chartRepository.setToothStatus(patientId, tooth, condition);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save tooth status: $error')),
+      );
+    }
+  }
+
+  Map<String, ToothCondition> _buildFallbackTreatmentPlan() {
+    return {
+      '26': ToothCondition.planned,
+      '13': ToothCondition.treated,
+      '46': ToothCondition.inProgress,
+      '45': ToothCondition.treated,
+      '37': ToothCondition.inProgress,
+      '31': ToothCondition.treated,
+    };
+  }
+
+  List<ToothCondition> _availableConditionsFrom(
+    Map<String, ToothCondition> plan,
+  ) {
+    final unique = <ToothCondition>{};
+    unique.addAll(plan.values);
+    unique.remove(ToothCondition.healthy);
+    return unique.isEmpty ? ToothCondition.values.toList() : unique.toList();
+  }
+
+  List<String> _mergeTreatmentTypes(
+    Map<String, List<String>> treatmentsByTooth,
+  ) {
+    final merged = <String>{};
+    for (final list in treatmentsByTooth.values) {
+      merged.addAll(list);
+    }
+    final sorted = merged.toList()..sort((a, b) => a.compareTo(b));
+    return sorted;
   }
 
   Widget _buildInfoChip(String label, String value) {
@@ -299,12 +449,39 @@ class _PatientDetailsContent extends StatelessWidget {
 }
 
 class _DentalChartSection extends StatelessWidget {
-  const _DentalChartSection();
+  final Map<String, ToothCondition> plan;
+  final ToothCondition? selectedCondition;
+  final List<ToothCondition> availableConditions;
+  final ValueChanged<ToothCondition?> onConditionChange;
+  final ValueChanged<String>? onToothTap;
+  final bool isLoading;
+  final String? error;
+  final bool readOnly;
+  final Map<String, List<String>> treatmentsByTooth;
+  final List<String> treatmentTypes;
+  final String? selectedTreatmentType;
+  final ValueChanged<String?>? onTreatmentTypeChange;
+  final TreatmentPalette palette;
+
+  const _DentalChartSection({
+    required this.plan,
+    required this.selectedCondition,
+    required this.availableConditions,
+    required this.onConditionChange,
+    this.onToothTap,
+    this.isLoading = false,
+    this.error,
+    this.readOnly = false,
+    this.treatmentsByTooth = const {},
+    this.treatmentTypes = const [],
+    this.selectedTreatmentType,
+    this.onTreatmentTypeChange,
+    required this.palette,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final themeText = Theme.of(context).textTheme;
-    final upperJaw = [
+    const upperJaw = [
       '18',
       '17',
       '16',
@@ -322,7 +499,7 @@ class _DentalChartSection extends StatelessWidget {
       '27',
       '28',
     ];
-    final lowerJaw = [
+    const lowerJaw = [
       '48',
       '47',
       '46',
@@ -340,14 +517,7 @@ class _DentalChartSection extends StatelessWidget {
       '37',
       '38',
     ];
-
-    final Map<String, _ToothCondition> plan = {
-      '26': _ToothCondition.planned,
-      '13': _ToothCondition.treated,
-      '46': _ToothCondition.inProgress,
-      '37': _ToothCondition.inProgress,
-      '31': _ToothCondition.treated,
-    };
+    final displayPlan = _buildDisplayPlan([...upperJaw, ...lowerJaw]);
 
     return Container(
       width: double.infinity,
@@ -357,48 +527,138 @@ class _DentalChartSection extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Dental chart',
-                    style: themeText.titleMedium?.copyWith(
-                      color: AppColors.textPrimary,
-                      fontWeight: FontWeight.w600,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Dental chart',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Tap a tooth to document treatment progress.',
-                    style: themeText.bodySmall?.copyWith(
-                      color: AppColors.textMuted.withOpacity(0.9),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Tap a status to highlight specific treatments.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: AppColors.textMuted.withOpacity(0.9),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-              _DentalLegend(),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: _DentalLegend(
+                    availableConditions: availableConditions,
+                    selectedCondition: selectedCondition,
+                    onChanged: onConditionChange,
+                    treatmentTypes: treatmentTypes,
+                    selectedTreatmentType: selectedTreatmentType,
+                    onTreatmentTypeChange: onTreatmentTypeChange,
+                    palette: palette,
+                  ),
+                ),
+              ),
             ],
           ),
+          const SizedBox(height: 8),
+          if (readOnly)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                'Select a patient to enable chart editing.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textMuted.withOpacity(0.85),
+                ),
+              ),
+            ),
+          if (error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                error!,
+                style: const TextStyle(
+                  color: Colors.redAccent,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          if (isLoading)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: LinearProgressIndicator(
+                minHeight: 4,
+                valueColor: const AlwaysStoppedAnimation(AppColors.accent),
+                backgroundColor: Colors.white.withOpacity(0.08),
+              ),
+            ),
           const SizedBox(height: 24),
-          _ToothRow(labels: upperJaw, plan: plan),
+          _ToothRow(
+            labels: upperJaw,
+            plan: displayPlan,
+            toothTreatments: treatmentsByTooth,
+            palette: palette,
+            selectedTreatmentType: selectedTreatmentType,
+            onToothTap: readOnly ? null : onToothTap,
+          ),
           const SizedBox(height: 16),
-          _ToothRow(labels: lowerJaw, plan: plan, inverted: true),
+          _ToothRow(
+            labels: lowerJaw,
+            plan: displayPlan,
+            inverted: true,
+            toothTreatments: treatmentsByTooth,
+            palette: palette,
+            selectedTreatmentType: selectedTreatmentType,
+            onToothTap: readOnly ? null : onToothTap,
+          ),
         ],
       ),
     );
+  }
+
+  Map<String, ToothCondition> _buildDisplayPlan(List<String> teeth) {
+    final result = <String, ToothCondition>{};
+    for (final tooth in teeth) {
+      final condition = plan[tooth] ?? ToothCondition.healthy;
+      final matchesCondition =
+          selectedCondition == null || selectedCondition == condition;
+      final matchesTreatment =
+          selectedTreatmentType == null ||
+          (treatmentsByTooth[tooth]?.contains(selectedTreatmentType) ?? false);
+      result[tooth] =
+          matchesCondition && matchesTreatment
+              ? condition
+              : ToothCondition.healthy;
+    }
+    return result;
   }
 }
 
 class _ToothRow extends StatelessWidget {
   final List<String> labels;
-  final Map<String, _ToothCondition> plan;
+  final Map<String, ToothCondition> plan;
   final bool inverted;
+  final ValueChanged<String>? onToothTap;
+  final Map<String, List<String>> toothTreatments;
+  final TreatmentPalette palette;
+  final String? selectedTreatmentType;
 
   const _ToothRow({
     required this.labels,
     required this.plan,
+    required this.toothTreatments,
+    required this.palette,
+    this.selectedTreatmentType,
+    this.onToothTap,
     this.inverted = false,
   });
 
@@ -411,8 +671,13 @@ class _ToothRow extends StatelessWidget {
                 (label) => Expanded(
                   child: _ToothTile(
                     label: label,
-                    condition: plan[label] ?? _ToothCondition.healthy,
+                    condition: plan[label] ?? ToothCondition.healthy,
                     inverted: inverted,
+                    treatments: toothTreatments[label] ?? const [],
+                    selectedTreatmentType: selectedTreatmentType,
+                    palette: palette,
+                    onTap:
+                        onToothTap != null ? () => onToothTap!(label) : null,
                   ),
                 ),
               )
@@ -422,95 +687,210 @@ class _ToothRow extends StatelessWidget {
 }
 
 class _DentalLegend extends StatelessWidget {
-  const _DentalLegend();
+  final List<ToothCondition> availableConditions;
+  final ToothCondition? selectedCondition;
+  final ValueChanged<ToothCondition?> onChanged;
+  final List<String> treatmentTypes;
+  final String? selectedTreatmentType;
+  final ValueChanged<String?>? onTreatmentTypeChange;
+  final TreatmentPalette palette;
+
+  const _DentalLegend({
+    required this.availableConditions,
+    required this.selectedCondition,
+    required this.onChanged,
+    required this.treatmentTypes,
+    required this.selectedTreatmentType,
+    required this.onTreatmentTypeChange,
+    required this.palette,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final entries = [
-      _LegendEntry(color: _ToothCondition.healthy.color, label: 'Healthy'),
-      _LegendEntry(color: _ToothCondition.treated.color, label: 'Treated'),
-      _LegendEntry(
-        color: _ToothCondition.inProgress.color,
-        label: 'In progress',
-      ),
-      _LegendEntry(color: _ToothCondition.planned.color, label: 'Planned'),
+    final conditions = (availableConditions.isEmpty
+            ? ToothCondition.values
+            : availableConditions)
+        .where((c) => c != ToothCondition.treated)
+        .toList();
+
+    final chips = <Widget>[
+      ...treatmentTypes.map((type) {
+        final isSelected = selectedTreatmentType == type;
+        final color = palette.colorFor(type);
+        return ChoiceChip(
+          label: Text(type),
+          selected: isSelected,
+          selectedColor: color,
+          backgroundColor: color.withOpacity(0.2),
+          labelStyle: TextStyle(
+            fontSize: 12,
+            color: isSelected ? AppColors.bg : AppColors.textPrimary,
+          ),
+          onSelected: onTreatmentTypeChange == null
+              ? null
+              : (_) => onTreatmentTypeChange!(
+                    isSelected ? null : type,
+                  ),
+        );
+      }),
+      ...conditions.map((condition) {
+        final isSelected = selectedCondition == condition;
+        return ChoiceChip(
+          label: Text(condition.label),
+          avatar: Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: condition.color,
+              shape: BoxShape.circle,
+            ),
+          ),
+          selected: isSelected,
+          selectedColor: condition.color,
+          backgroundColor: Colors.white.withOpacity(0.06),
+          labelStyle: TextStyle(
+            fontSize: 12,
+            color: isSelected ? AppColors.bg : AppColors.textMuted,
+          ),
+          onSelected: (_) => onChanged(isSelected ? null : condition),
+        );
+      }),
     ];
 
     return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children:
-          entries
-              .map(
-                (entry) => Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 14,
-                      height: 14,
-                      decoration: BoxDecoration(
-                        color: entry.color,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      entry.label,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textMuted.withOpacity(0.9),
-                      ),
-                    ),
-                  ],
-                ),
-              )
-              .toList(),
+      spacing: 8,
+      runSpacing: 8,
+      alignment: WrapAlignment.end,
+      children: chips,
     );
   }
 }
 
-class _LegendEntry {
-  final Color color;
-  final String label;
-
-  _LegendEntry({required this.color, required this.label});
-}
-
 class _ToothTile extends StatelessWidget {
   final String label;
-  final _ToothCondition condition;
+  final ToothCondition condition;
   final bool inverted;
+  final VoidCallback? onTap;
+  final List<String> treatments;
+  final String? selectedTreatmentType;
+  final TreatmentPalette palette;
 
   const _ToothTile({
     required this.label,
     required this.condition,
     required this.inverted,
+    required this.treatments,
+    required this.palette,
+    this.selectedTreatmentType,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        children: [
+          if (inverted) _ToothShape(condition: condition),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.4,
+              color: AppColors.textMuted.withOpacity(0.9),
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (!inverted) _ToothShape(condition: condition),
+          if (treatments.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: _TreatmentDots(
+                treatments: treatments,
+                palette: palette,
+                selectedTreatmentType: selectedTreatmentType,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TreatmentDots extends StatelessWidget {
+  final List<String> treatments;
+  final TreatmentPalette palette;
+  final String? selectedTreatmentType;
+
+  const _TreatmentDots({
+    required this.treatments,
+    required this.palette,
+    this.selectedTreatmentType,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final unique = {...treatments}.toList()..sort();
+    final visible = unique.take(4).toList();
+    final rest = unique.length - visible.length;
+
+    return Wrap(
+      spacing: 4,
+      runSpacing: 4,
+      alignment: WrapAlignment.center,
       children: [
-        if (inverted) _ToothShape(condition: condition),
-        const SizedBox(height: 8),
-        Text(
-          label,
+        ...visible.map(_buildDot),
+        if (rest > 0)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              '+$rest',
+              style: TextStyle(
+                fontSize: 10,
+                color: AppColors.textMuted.withOpacity(0.9),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildDot(String type) {
+    final color = palette.colorFor(type);
+    final isSelected = selectedTreatmentType == null
+        ? true
+        : selectedTreatmentType == type;
+
+    return Tooltip(
+      message: type,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+        decoration: BoxDecoration(
+          color: isSelected ? color.withOpacity(0.85) : color.withOpacity(0.35),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withOpacity(0.14)),
+        ),
+        child: Text(
+          type.substring(0, 1).toUpperCase(),
           style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.4,
-            color: AppColors.textMuted.withOpacity(0.9),
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            color: Colors.white.withOpacity(isSelected ? 0.95 : 0.7),
           ),
         ),
-        const SizedBox(height: 8),
-        if (!inverted) _ToothShape(condition: condition),
-      ],
+      ),
     );
   }
 }
 
 class _ToothShape extends StatelessWidget {
-  final _ToothCondition condition;
+  final ToothCondition condition;
 
   const _ToothShape({required this.condition});
 
@@ -529,7 +909,7 @@ class _ToothShape extends StatelessWidget {
           ],
         ),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.2)),
+        border: Border.all(color: Colors.white.withOpacity(0.15)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.25),
@@ -539,23 +919,6 @@ class _ToothShape extends StatelessWidget {
         ],
       ),
     );
-  }
-}
-
-enum _ToothCondition { healthy, treated, inProgress, planned }
-
-extension on _ToothCondition {
-  Color get color {
-    switch (this) {
-      case _ToothCondition.healthy:
-        return AppColors.surfaceDark.withOpacity(0.9);
-      case _ToothCondition.treated:
-        return AppColors.accent.withOpacity(0.9);
-      case _ToothCondition.inProgress:
-        return Colors.pinkAccent.withOpacity(0.9);
-      case _ToothCondition.planned:
-        return Colors.tealAccent.withOpacity(0.9);
-    }
   }
 }
 
