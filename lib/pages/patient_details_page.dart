@@ -707,14 +707,20 @@ class _DentalLegend extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const chipPadding = EdgeInsets.symmetric(horizontal: 6, vertical: 3);
+    final chipBorder = BorderSide(color: Colors.white.withOpacity(0.12));
     final conditions = (availableConditions.isEmpty
             ? ToothCondition.values
             : availableConditions)
         .where((c) => c != ToothCondition.treated)
         .toList();
 
+    const maxVisibleTypes = 4;
+    final visibleTypes = treatmentTypes.take(maxVisibleTypes).toList();
+    final extraCount = treatmentTypes.length - visibleTypes.length;
+
     final chips = <Widget>[
-      ...treatmentTypes.map((type) {
+      ...visibleTypes.map((type) {
         final isSelected = selectedTreatmentType == type;
         final color = palette.colorFor(type);
         return ChoiceChip(
@@ -723,9 +729,13 @@ class _DentalLegend extends StatelessWidget {
           selectedColor: color,
           backgroundColor: color.withOpacity(0.2),
           labelStyle: TextStyle(
-            fontSize: 12,
+            fontSize: 10,
             color: isSelected ? AppColors.bg : AppColors.textPrimary,
           ),
+          labelPadding: chipPadding,
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          side: chipBorder,
           onSelected: onTreatmentTypeChange == null
               ? null
               : (_) => onTreatmentTypeChange!(
@@ -733,6 +743,22 @@ class _DentalLegend extends StatelessWidget {
                   ),
         );
       }),
+      if (extraCount > 0)
+        ChoiceChip(
+          label: Text('+$extraCount'),
+          selected: false,
+          backgroundColor: Colors.white.withOpacity(0.08),
+          labelStyle:
+              const TextStyle(fontSize: 10, color: AppColors.textPrimary),
+          labelPadding: chipPadding,
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          side: chipBorder,
+          onSelected:
+              onTreatmentTypeChange == null
+                  ? null
+                  : (_) => _showTreatmentPicker(context),
+        ),
       ...conditions.map((condition) {
         final isSelected = selectedCondition == condition;
         return ChoiceChip(
@@ -749,19 +775,139 @@ class _DentalLegend extends StatelessWidget {
           selectedColor: condition.color,
           backgroundColor: Colors.white.withOpacity(0.06),
           labelStyle: TextStyle(
-            fontSize: 12,
+            fontSize: 10,
             color: isSelected ? AppColors.bg : AppColors.textMuted,
           ),
+          labelPadding: chipPadding,
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          side: chipBorder,
           onSelected: (_) => onChanged(isSelected ? null : condition),
         );
       }),
     ];
 
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      alignment: WrapAlignment.end,
-      children: chips,
+    final spacedChips = <Widget>[];
+    for (var i = 0; i < chips.length; i++) {
+      spacedChips.add(chips[i]);
+      if (i != chips.length - 1) {
+        spacedChips.add(const SizedBox(width: 4));
+      }
+    }
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.only(right: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: spacedChips,
+      ),
+    );
+  }
+
+  void _showTreatmentPicker(BuildContext context) {
+    if (onTreatmentTypeChange == null) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 500),
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    AppColors.accent.withOpacity(0.4),
+                    AppColors.accentStrong.withOpacity(0.5),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              padding: const EdgeInsets.all(2),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceDark.withOpacity(0.98),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: AppColors.accent.withOpacity(0.7),
+                    width: 1.2,
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Text(
+                              'Treatment types',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                            const Spacer(),
+                            TextButton(
+                              onPressed: () {
+                                onTreatmentTypeChange!(null);
+                                Navigator.of(ctx).pop();
+                              },
+                              child: const Text(
+                                'All types',
+                                style: TextStyle(color: AppColors.accent),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: treatmentTypes.map((type) {
+                            final isSelected = selectedTreatmentType == type;
+                            final color = palette.colorFor(type);
+                            return ChoiceChip(
+                              label: Text(type),
+                              selected: isSelected,
+                              selectedColor: color,
+                              backgroundColor: color.withOpacity(0.2),
+                              labelStyle: TextStyle(
+                                fontSize: 12,
+                                color: isSelected
+                                    ? AppColors.bg
+                                    : AppColors.textPrimary,
+                              ),
+                              onSelected: (_) {
+                                onTreatmentTypeChange!(
+                                  isSelected ? null : type,
+                                );
+                                Navigator.of(ctx).pop();
+                              },
+                            );
+                          }).toList(),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
