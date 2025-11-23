@@ -103,7 +103,7 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
               paidTotalText: _formatMoney(paymentStats.totalPaid),
             );
 
-            final scheduleCard = _ScheduleCard();
+            final scheduleCard = _ScheduleCard(patientId: patientId);
 
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -744,6 +744,9 @@ class _InfoCard extends StatelessWidget {
 }
 
 class _ScheduleCard extends StatelessWidget {
+  final String? patientId;
+
+  const _ScheduleCard({Key? key, this.patientId}) : super(key: key);
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -752,13 +755,44 @@ class _ScheduleCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Upcoming treatments',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Upcoming treatments',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: patientId == null
+                    ? null
+                    : () {
+                        showDialog(
+                          context: context,
+                          barrierDismissible: true,
+                          builder: (ctx) => _AddTreatmentDialog(
+                            patientId: patientId!,
+                          ),
+                        );
+                      },
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.accent,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add'),
+              ),
+            ],
           ),
           const SizedBox(height: 16),
           ...[
@@ -781,7 +815,16 @@ class _ScheduleCard extends StatelessWidget {
           ],
           const SizedBox(height: 24),
           ElevatedButton.icon(
-            onPressed: () {},
+            onPressed: () {
+              if (patientId == null) return;
+              showDialog(
+                context: context,
+                barrierDismissible: true,
+                builder: (ctx) => _AddTreatmentDialog(
+                  patientId: patientId!,
+                ),
+              );
+            },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.white.withOpacity(0.08),
               foregroundColor: AppColors.textPrimary,
@@ -815,6 +858,7 @@ class _DentalChartSection extends StatelessWidget {
   final String? selectedTreatmentType;
   final ValueChanged<String?>? onTreatmentTypeChange;
   final TreatmentPalette palette;
+  final Set<String> selectedTeeth;
 
   const _DentalChartSection({
     required this.plan,
@@ -830,6 +874,7 @@ class _DentalChartSection extends StatelessWidget {
     this.selectedTreatmentType,
     this.onTreatmentTypeChange,
     required this.palette,
+    this.selectedTeeth = const {},
   });
 
   @override
@@ -961,6 +1006,7 @@ class _DentalChartSection extends StatelessWidget {
             toothTreatments: treatmentsByTooth,
             palette: palette,
             selectedTreatmentType: selectedTreatmentType,
+            selectedTeeth: selectedTeeth,
             onToothTap: readOnly ? null : onToothTap,
           ),
           const SizedBox(height: 16),
@@ -971,6 +1017,7 @@ class _DentalChartSection extends StatelessWidget {
             toothTreatments: treatmentsByTooth,
             palette: palette,
             selectedTreatmentType: selectedTreatmentType,
+            selectedTeeth: selectedTeeth,
             onToothTap: readOnly ? null : onToothTap,
           ),
         ],
@@ -1004,6 +1051,7 @@ class _ToothRow extends StatelessWidget {
   final Map<String, List<String>> toothTreatments;
   final TreatmentPalette palette;
   final String? selectedTreatmentType;
+  final Set<String> selectedTeeth;
 
   const _ToothRow({
     required this.labels,
@@ -1013,6 +1061,7 @@ class _ToothRow extends StatelessWidget {
     this.selectedTreatmentType,
     this.onToothTap,
     this.inverted = false,
+    this.selectedTeeth = const {},
   });
 
   @override
@@ -1029,6 +1078,7 @@ class _ToothRow extends StatelessWidget {
                     treatments: toothTreatments[label] ?? const [],
                     selectedTreatmentType: selectedTreatmentType,
                     palette: palette,
+                    isSelected: selectedTeeth.contains(label),
                     onTap:
                         onToothTap != null ? () => onToothTap!(label) : null,
                   ),
@@ -1273,6 +1323,7 @@ class _ToothTile extends StatelessWidget {
   final List<String> treatments;
   final String? selectedTreatmentType;
   final TreatmentPalette palette;
+  final bool isSelected;
 
   const _ToothTile({
     required this.label,
@@ -1281,6 +1332,7 @@ class _ToothTile extends StatelessWidget {
     required this.treatments,
     required this.palette,
     this.selectedTreatmentType,
+    this.isSelected = false,
     this.onTap,
   });
 
@@ -1290,7 +1342,7 @@ class _ToothTile extends StatelessWidget {
       onTap: onTap,
       child: Column(
         children: [
-          if (inverted) _ToothShape(condition: condition),
+          if (inverted) _ToothShape(condition: condition, selected: isSelected),
           const SizedBox(height: 8),
           Text(
             label,
@@ -1302,7 +1354,7 @@ class _ToothTile extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          if (!inverted) _ToothShape(condition: condition),
+          if (!inverted) _ToothShape(condition: condition, selected: isSelected),
           if (treatments.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 6),
@@ -1390,8 +1442,9 @@ class _TreatmentDots extends StatelessWidget {
 
 class _ToothShape extends StatelessWidget {
   final ToothCondition condition;
+  final bool selected;
 
-  const _ToothShape({required this.condition});
+  const _ToothShape({required this.condition, this.selected = false});
 
   @override
   Widget build(BuildContext context) {
@@ -1408,15 +1461,313 @@ class _ToothShape extends StatelessWidget {
           ],
         ),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.15)),
+        border: Border.all(
+          color: selected
+              ? AppColors.accent.withOpacity(0.9)
+              : Colors.white.withOpacity(0.15),
+          width: selected ? 2 : 1,
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.25),
-            blurRadius: 14,
-            spreadRadius: 4,
+            color: selected
+                ? AppColors.accent.withOpacity(0.35)
+                : Colors.black.withOpacity(0.25),
+            blurRadius: selected ? 18 : 14,
+            spreadRadius: selected ? 6 : 4,
           ),
         ],
       ),
+    );
+  }
+}
+
+class _AddTreatmentDialog extends StatefulWidget {
+  final String patientId;
+
+  const _AddTreatmentDialog({Key? key, required this.patientId}) : super(key: key);
+
+  @override
+  State<_AddTreatmentDialog> createState() => _AddTreatmentDialogState();
+}
+
+class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
+  final DentalChartRepository _repo = DentalChartRepository();
+  final TreatmentPalette _palette = TreatmentPalette();
+  static const List<String> _fallbackTypes = [
+    'Кариес',
+    'Имплантация',
+    'Удаление',
+    'Сканирование',
+    'Эндо',
+    'Формирователь',
+    'РММА',
+    'Коронка',
+    'Абатмент',
+    'Сдача РММА',
+    'Сдача коронка',
+    'Сдача абатмент',
+    'Удаление импланта',
+  ];
+
+  final Set<String> _selectedTeeth = {};
+  String? _selectedType;
+  bool _saving = false;
+
+  bool _typesLoading = true;
+  String? _typesError;
+  List<String> _types = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTypes();
+  }
+
+  Future<void> _loadTypes() async {
+    setState(() {
+      _typesLoading = true;
+      _typesError = null;
+    });
+    try {
+      final set = await _repo.loadTreatmentTypes(patientId: widget.patientId);
+      final withFallback = <String>{...set, ..._fallbackTypes};
+      final items = withFallback.toList()..sort();
+      setState(() {
+        _types = items;
+      });
+    } catch (e) {
+      setState(() {
+        _typesError = 'Failed to load types: $e';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _typesLoading = false;
+        });
+      }
+    }
+  }
+
+  void _toggleTooth(String tooth) {
+    setState(() {
+      if (_selectedTeeth.contains(tooth)) {
+        _selectedTeeth.remove(tooth);
+      } else {
+        _selectedTeeth.add(tooth);
+      }
+    });
+  }
+
+  Future<void> _save() async {
+    if (_selectedType == null || _selectedTeeth.isEmpty) return;
+    setState(() => _saving = true);
+    try {
+      await FirebaseFirestore.instance.collection('treatments').add({
+        'patientId': widget.patientId,
+        'treatmentType': _selectedType,
+        'toothNumber': _selectedTeeth.toList()..sort(),
+        'status': 'treated',
+        'date': FieldValue.serverTimestamp(),
+        'source': 'add-dialog',
+      });
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1100),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                AppColors.accent.withOpacity(0.35),
+                AppColors.accentStrong.withOpacity(0.45),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(22),
+          ),
+          padding: const EdgeInsets.all(2),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.surface.withOpacity(0.98),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withOpacity(0.12)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Text(
+                        'Add treatment',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        onPressed: _saving ? null : () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close, color: AppColors.textMuted),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _buildTypeSelector(),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    height: 520,
+                    child: _DentalChartSection(
+                      // Empty chart: do not reflect patient's current statuses
+                      plan: const <String, ToothCondition>{},
+                      selectedCondition: null,
+                      // Passing only treated hides condition chips in legend
+                      availableConditions: const [ToothCondition.treated],
+                      onConditionChange: (_) {},
+                      onToothTap: (t) => _toggleTooth(t),
+                      isLoading: false,
+                      error: null,
+                      treatmentsByTooth: const {},
+                      treatmentTypes: _types,
+                      selectedTreatmentType: _selectedType,
+                      onTreatmentTypeChange: (t) => setState(() {
+                        _selectedType = t;
+                      }),
+                      palette: _palette,
+                      selectedTeeth: _selectedTeeth,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (_selectedTeeth.isNotEmpty)
+                    Builder(builder: (context) {
+                      final list = _selectedTeeth.toList()..sort();
+                      return Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: list
+                            .map((t) => Chip(
+                                  label: Text('Tooth $t'),
+                                  deleteIcon: const Icon(Icons.close, size: 16),
+                                  onDeleted: _saving ? null : () => _toggleTooth(t),
+                                ))
+                            .toList(),
+                      );
+                    }),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _selectedType == null
+                              ? 'Select a treatment type'
+                              : 'Type: ${_selectedType!}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textMuted.withOpacity(0.9),
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _saving ? null : () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        onPressed: _saving || _selectedType == null || _selectedTeeth.isEmpty
+                            ? null
+                            : _save,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.accent,
+                          foregroundColor: AppColors.bg,
+                        ),
+                        icon: _saving
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation(AppColors.bg),
+                                ),
+                              )
+                            : const Icon(Icons.check),
+                        label: const Text('Save'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTypeSelector() {
+    if (_typesLoading) {
+      return LinearProgressIndicator(
+        minHeight: 4,
+        valueColor: const AlwaysStoppedAnimation(AppColors.accent),
+        backgroundColor: Colors.white.withOpacity(0.08),
+      );
+    }
+    if (_typesError != null) {
+      return Text(
+        _typesError!,
+        style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+      );
+    }
+    if (_types.isEmpty) {
+      return Text(
+        'No treatment types found. Add new via database.',
+        style: TextStyle(
+          fontSize: 12,
+          color: AppColors.textMuted.withOpacity(0.9),
+        ),
+      );
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: _types.map((type) {
+        final isSelected = _selectedType == type;
+        final color = _palette.colorFor(type);
+        return ChoiceChip(
+          label: Text(type),
+          selected: isSelected,
+          selectedColor: color,
+          backgroundColor: color.withOpacity(0.25),
+          labelStyle: TextStyle(
+            color: isSelected ? AppColors.bg : AppColors.textPrimary,
+          ),
+          onSelected: (_) {
+            setState(() {
+              _selectedType = isSelected ? null : type;
+            });
+          },
+        );
+      }).toList(),
     );
   }
 }
