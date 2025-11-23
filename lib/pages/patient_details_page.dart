@@ -85,6 +85,7 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
             patientId != null &&
             snapshot.connectionState == ConnectionState.waiting;
         final initialBucket = PatientBucketService.bucketFromData(data);
+        final paymentStats = _computePaymentStats(data);
 
         return LayoutBuilder(
           builder: (context, constraints) {
@@ -98,6 +99,8 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
               isSavingBucket: _isSavingBucket,
               bucketService: _bucketService,
               onBucketSelect: _handleBucketSelect,
+              totalCostText: _formatMoney(paymentStats.totalCost),
+              paidTotalText: _formatMoney(paymentStats.totalPaid),
             );
 
             final scheduleCard = _ScheduleCard();
@@ -371,6 +374,47 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
     if (first.isNotEmpty) return first;
     return fallbackName;
   }
+
+  PaymentStats _computePaymentStats(Map<String, dynamic>? data) {
+    if (data == null) return PaymentStats.empty();
+
+    final priceValue = data['price'];
+    final totalCost = priceValue is num ? priceValue.toDouble() : null;
+
+    double totalPaid = 0;
+    final paymentsRaw = data['payments'];
+    if (paymentsRaw is List) {
+      for (final p in paymentsRaw) {
+        if (p is Map) {
+          final amount = p['amount'];
+          if (amount is num) {
+            totalPaid += amount.toDouble();
+          }
+        }
+      }
+    }
+
+    return PaymentStats(totalCost: totalCost, totalPaid: totalPaid);
+  }
+
+  String _formatMoney(double? amount) {
+    if (amount == null) return '--';
+    final isInt = amount % 1 == 0;
+    final formatted = isInt ? amount.toInt().toString() : amount.toStringAsFixed(2);
+    return '\$$formatted';
+  }
+}
+
+class PaymentStats {
+  final double? totalCost;
+  final double totalPaid;
+
+  const PaymentStats({
+    required this.totalCost,
+    required this.totalPaid,
+  });
+
+  factory PaymentStats.empty() => const PaymentStats(totalCost: null, totalPaid: 0);
 }
 
 class _InlineBucketSelector extends StatelessWidget {
@@ -531,6 +575,8 @@ class _InfoCard extends StatelessWidget {
   final PatientBucketService bucketService;
   final Future<void> Function(String patientId, int bucketId, int? currentBucket)?
       onBucketSelect;
+  final String totalCostText;
+  final String paidTotalText;
 
   const _InfoCard({
     required this.resolvedName,
@@ -540,6 +586,8 @@ class _InfoCard extends StatelessWidget {
     required this.isSavingBucket,
     required this.bucketService,
     required this.onBucketSelect,
+    required this.totalCostText,
+    required this.paidTotalText,
   });
 
   @override
@@ -605,9 +653,9 @@ class _InfoCard extends StatelessWidget {
           const SizedBox(height: 24),
           Row(
             children: [
-              _buildInfoChip('Last visit', '14 Nov - Hygiene'),
+              _buildInfoChip('Total cost', totalCostText),
               const SizedBox(width: 12),
-              _buildInfoChip('Assigned doctor', 'Dr. Emily Ross'),
+              _buildInfoChip('Paid to date', paidTotalText),
             ],
           ),
           const SizedBox(height: 20),
