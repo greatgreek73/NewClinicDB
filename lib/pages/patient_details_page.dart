@@ -566,32 +566,15 @@ class _InfoCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            resolvedName,
-                            style: const TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textPrimary,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        _InlineBucketSelector(
-                          patientId: patientId,
-                          initialBucket: initialBucket,
-                          isSaving: isSavingBucket,
-                          bucketService: bucketService,
-                          onSelect: (bucketId, currentBucket) {
-                            if (patientId == null || onBucketSelect == null) return;
-                            onBucketSelect!(patientId!, bucketId, currentBucket);
-                          },
-                        ),
-                      ],
+                    Text(
+                      resolvedName,
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -602,6 +585,17 @@ class _InfoCard extends StatelessWidget {
                         fontSize: 13,
                         color: AppColors.textMuted.withOpacity(0.9),
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    _InlineBucketSelector(
+                      patientId: patientId,
+                      initialBucket: initialBucket,
+                      isSaving: isSavingBucket,
+                      bucketService: bucketService,
+                      onSelect: (bucketId, currentBucket) {
+                        if (patientId == null || onBucketSelect == null) return;
+                        onBucketSelect!(patientId!, bucketId, currentBucket);
+                      },
                     ),
                   ],
                 ),
