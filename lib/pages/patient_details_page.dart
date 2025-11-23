@@ -1,9 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../models/patient_bucket.dart';
 import '../models/tooth_condition.dart';
 import '../models/treatment_palette.dart';
 import '../services/dental_chart_repository.dart';
+import '../services/patient_bucket_service.dart';
 import '../theme/app_colors.dart';
 import '../utils/decorations.dart';
 import '../widgets/page_header.dart';
@@ -44,12 +46,14 @@ class _PatientDetailsContent extends StatefulWidget {
 
 class _PatientDetailsContentState extends State<_PatientDetailsContent> {
   final DentalChartRepository _chartRepository = DentalChartRepository();
+  final PatientBucketService _bucketService = PatientBucketService();
 
   ToothCondition? _selectedCondition;
   Stream<Map<String, ToothCondition>>? _chartStream;
   Stream<Map<String, List<String>>>? _treatmentsStream;
   final TreatmentPalette _treatmentPalette = TreatmentPalette();
   String? _selectedTreatmentType;
+  bool _isSavingBucket = false;
 
   @override
   void initState() {
@@ -80,158 +84,23 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
         final isLoadingName =
             patientId != null &&
             snapshot.connectionState == ConnectionState.waiting;
+        final initialBucket = PatientBucketService.bucketFromData(data);
 
         return LayoutBuilder(
           builder: (context, constraints) {
             final isWide = constraints.maxWidth > 820;
 
-            final infoCard = Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(24),
-                decoration: buildSurfaceCardDecoration(glow: true),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        CircleAvatar(
-                          radius: 32,
-                          backgroundColor: AppColors.accent.withOpacity(0.2),
-                          child: const Icon(
-                            Icons.person,
-                            size: 32,
-                            color: AppColors.accent,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              resolvedName,
-                              style: const TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.textPrimary,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              isLoadingName
-                                  ? 'Loading patient profile...'
-                                  : 'Member since 2019 - VIP Plan',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: AppColors.textMuted.withOpacity(0.9),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-                    Row(
-                      children: [
-                        _buildInfoChip('Last visit', '14 Nov - Hygiene'),
-                        const SizedBox(width: 12),
-                        _buildInfoChip('Assigned doctor', 'Dr. Emily Ross'),
-                      ],
-                    ),
-                    const SizedBox(height: 20),
-                    Divider(color: Colors.white.withOpacity(0.1)),
-                    const SizedBox(height: 20),
-                    Text(
-                      'Contact & preferences',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: AppColors.textMuted.withOpacity(0.9),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    _buildContactRow(Icons.phone, '+1 202 555 0124'),
-                    const SizedBox(height: 8),
-                    _buildContactRow(
-                      Icons.email_outlined,
-                      'anna.petrova@email.com',
-                    ),
-                    const SizedBox(height: 8),
-                    _buildContactRow(
-                      Icons.location_on_outlined,
-                      'Downtown branch - Room 2',
-                    ),
-                    const SizedBox(height: 20),
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: buildSurfaceCardDecoration(),
-                      child: const Text(
-                        'Notes: Prefers morning appointments. Allergic to penicillin. Interested in implant upgrade in Q1.',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: AppColors.textPrimary,
-                          height: 1.4,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+            final infoCard = _InfoCard(
+              resolvedName: resolvedName,
+              isLoadingName: isLoadingName,
+              patientId: patientId,
+              initialBucket: initialBucket,
+              isSavingBucket: _isSavingBucket,
+              bucketService: _bucketService,
+              onBucketSelect: _handleBucketSelect,
             );
 
-            final scheduleCard = Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(24),
-                decoration: buildSurfaceCardDecoration(),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Upcoming treatments',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    ...[
-                      _AppointmentRow(
-                        date: '20 Nov',
-                        title: 'Implant planning session',
-                        meta: 'Dr. Emily Ross - Room 4',
-                        highlight: true,
-                      ),
-                      _AppointmentRow(
-                        date: '04 Dec',
-                        title: 'Crown placement & hygiene',
-                        meta: 'Dr. Gomez - Room 1',
-                      ),
-                      _AppointmentRow(
-                        date: '11 Jan',
-                        title: 'Follow-up & whitening',
-                        meta: 'Dr. Emily Ross - Room 2',
-                      ),
-                    ],
-                    const SizedBox(height: 24),
-                    ElevatedButton.icon(
-                      onPressed: () {},
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white.withOpacity(0.08),
-                        foregroundColor: AppColors.textPrimary,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 22,
-                          vertical: 14,
-                        ),
-                      ),
-                      icon: const Icon(Icons.add),
-                      label: const Text('Schedule new appointment'),
-                    ),
-                  ],
-                ),
-              ),
-            );
+            final scheduleCard = _ScheduleCard();
 
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -243,14 +112,14 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
                   actionLabel: 'Back to dashboard',
                   onAction: () => Navigator.of(context).pop(),
                 ),
-                const SizedBox(height: 28),
+                const SizedBox(height: 20),
                 if (isWide)
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      infoCard,
+                      Expanded(child: infoCard),
                       const SizedBox(width: 24),
-                      scheduleCard,
+                      Expanded(child: scheduleCard),
                     ],
                   )
                 else ...[
@@ -260,12 +129,112 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
                 ],
                 const SizedBox(height: 28),
                 _buildDentalChart(patientId),
+                const SizedBox(height: 16),
+                _buildBucketSummary(patientId, initialBucket),
               ],
             );
           },
         );
       },
     );
+  }
+
+  Widget _buildBucketSummary(String? patientId, int? initialBucket) {
+    final resolvedId = patientId;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: buildSurfaceCardDecoration(),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const Icon(
+            Icons.info_outline,
+            color: AppColors.accent,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Priority basket status',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                StreamBuilder<int?>(
+                  stream: resolvedId == null
+                      ? const Stream.empty()
+                      : _bucketService.watchPatientBucket(resolvedId),
+                  initialData: initialBucket,
+                  builder: (context, snapshot) {
+                    final bucketId = snapshot.data ?? initialBucket;
+                    final bucket = bucketId != null ? bucketById(bucketId) : null;
+                    final title = bucket?.title ?? 'No basket selected';
+                    final desc =
+                        bucket?.description ?? 'Choose a basket at the top near the name.';
+                    return Text(
+                      '$title — $desc',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textMuted.withOpacity(0.9),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          _BucketIconRow(
+            activeBucket: initialBucket,
+            enabled: false,
+            isSaving: false,
+            onTap: null,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handleBucketSelect(
+    String patientId,
+    int bucketId,
+    int? currentBucket,
+  ) async {
+    if (_isSavingBucket || currentBucket == bucketId) return;
+    setState(() {
+      _isSavingBucket = true;
+    });
+
+    try {
+      await _bucketService.setPatientBucket(patientId, bucketId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Assigned to ${bucketById(bucketId)?.title ?? 'bucket $bucketId'}.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not update bucket: $error'),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSavingBucket = false;
+        });
+      }
+    }
   }
 
   Widget _buildDentalChart(String? patientId) {
@@ -392,6 +361,301 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
     return sorted;
   }
 
+  String _resolvePatientName(Map<String, dynamic>? data, String fallbackName) {
+    if (data == null) return fallbackName;
+    final first = data['name']?.toString().trim() ?? '';
+    final last = data['surname']?.toString().trim() ?? '';
+    final combined = (first + ' ' + last).trim();
+    if (combined.isNotEmpty) return combined;
+    if (last.isNotEmpty) return last;
+    if (first.isNotEmpty) return first;
+    return fallbackName;
+  }
+}
+
+class _InlineBucketSelector extends StatelessWidget {
+  final String? patientId;
+  final int? initialBucket;
+  final bool isSaving;
+  final PatientBucketService bucketService;
+  final void Function(int bucketId, int? currentBucket)? onSelect;
+
+  const _InlineBucketSelector({
+    required this.patientId,
+    required this.initialBucket,
+    required this.isSaving,
+    required this.bucketService,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasPatient = patientId != null;
+    if (!hasPatient) {
+      return _BucketIconRow(
+        activeBucket: initialBucket,
+        enabled: false,
+        isSaving: false,
+        onTap: null,
+      );
+    }
+
+    final resolvedId = patientId!;
+    return StreamBuilder<int?>(
+      stream: bucketService.watchPatientBucket(resolvedId),
+      initialData: initialBucket,
+      builder: (context, snapshot) {
+        final activeBucket = snapshot.data ?? initialBucket;
+        final isStreamLoading =
+            snapshot.connectionState == ConnectionState.waiting &&
+            activeBucket == null;
+
+        return _BucketIconRow(
+          activeBucket: activeBucket,
+          enabled: !isSaving && !isStreamLoading,
+          isSaving: isSaving || isStreamLoading,
+          onTap: (bucketId) => onSelect?.call(bucketId, activeBucket),
+        );
+      },
+    );
+  }
+}
+
+class _BucketIconRow extends StatelessWidget {
+  final int? activeBucket;
+  final bool enabled;
+  final bool isSaving;
+  final ValueChanged<int>? onTap;
+
+  const _BucketIconRow({
+    required this.activeBucket,
+    required this.enabled,
+    required this.isSaving,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        ...patientBuckets.map((bucket) {
+          final isActive = bucket.id == activeBucket;
+          return Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: _BucketMiniIcon(
+              bucket: bucket,
+              isActive: isActive,
+              enabled: enabled,
+              onTap: onTap == null ? null : () => onTap!(bucket.id),
+            ),
+          );
+        }),
+        if (isSaving)
+          const SizedBox(
+            width: 18,
+            height: 18,
+            child: Padding(
+              padding: EdgeInsets.only(left: 4),
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation(AppColors.accent),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _BucketMiniIcon extends StatelessWidget {
+  final PatientBucketDefinition bucket;
+  final bool isActive;
+  final bool enabled;
+  final VoidCallback? onTap;
+
+  const _BucketMiniIcon({
+    required this.bucket,
+    required this.isActive,
+    required this.enabled,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = bucket.color;
+    final bg = isActive ? color.withOpacity(0.35) : Colors.white.withOpacity(0.08);
+
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: Tooltip(
+        message: '${bucket.title} (basket ${bucket.id})',
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: isActive ? color.withOpacity(0.9) : Colors.white.withOpacity(0.12),
+            ),
+            boxShadow: isActive
+                ? [
+                    BoxShadow(
+                      color: color.withOpacity(0.35),
+                      blurRadius: 18,
+                      spreadRadius: 4,
+                    ),
+                  ]
+                : [],
+          ),
+          child: Icon(
+            Icons.shopping_basket_rounded,
+            size: 18,
+            color: enabled
+                ? (isActive ? AppColors.textPrimary : Colors.white.withOpacity(0.9))
+                : Colors.white.withOpacity(0.35),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _InfoCard extends StatelessWidget {
+  final String resolvedName;
+  final bool isLoadingName;
+  final String? patientId;
+  final int? initialBucket;
+  final bool isSavingBucket;
+  final PatientBucketService bucketService;
+  final Future<void> Function(String patientId, int bucketId, int? currentBucket)?
+      onBucketSelect;
+
+  const _InfoCard({
+    required this.resolvedName,
+    required this.isLoadingName,
+    required this.patientId,
+    required this.initialBucket,
+    required this.isSavingBucket,
+    required this.bucketService,
+    required this.onBucketSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: buildSurfaceCardDecoration(glow: true),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 32,
+                backgroundColor: AppColors.accent.withOpacity(0.2),
+                child: const Icon(
+                  Icons.person,
+                  size: 32,
+                  color: AppColors.accent,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            resolvedName,
+                            style: const TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textPrimary,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        _InlineBucketSelector(
+                          patientId: patientId,
+                          initialBucket: initialBucket,
+                          isSaving: isSavingBucket,
+                          bucketService: bucketService,
+                          onSelect: (bucketId, currentBucket) {
+                            if (patientId == null || onBucketSelect == null) return;
+                            onBucketSelect!(patientId!, bucketId, currentBucket);
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      isLoadingName
+                          ? 'Loading patient profile...'
+                          : 'Member since 2019 - VIP Plan',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: AppColors.textMuted.withOpacity(0.9),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              _buildInfoChip('Last visit', '14 Nov - Hygiene'),
+              const SizedBox(width: 12),
+              _buildInfoChip('Assigned doctor', 'Dr. Emily Ross'),
+            ],
+          ),
+          const SizedBox(height: 20),
+          Divider(color: Colors.white.withOpacity(0.1)),
+          const SizedBox(height: 20),
+          Text(
+            'Contact & preferences',
+            style: TextStyle(
+              fontSize: 13,
+              color: AppColors.textMuted.withOpacity(0.9),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _buildContactRow(Icons.phone, '+1 202 555 0124'),
+          const SizedBox(height: 8),
+          _buildContactRow(
+            Icons.email_outlined,
+            'anna.petrova@email.com',
+          ),
+          const SizedBox(height: 8),
+          _buildContactRow(
+            Icons.location_on_outlined,
+            'Downtown branch - Room 2',
+          ),
+          const SizedBox(height: 20),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: buildSurfaceCardDecoration(),
+            child: const Text(
+              'Notes: Prefers morning appointments. Allergic to penicillin. Interested in implant upgrade in Q1.',
+              style: TextStyle(
+                fontSize: 13,
+                color: AppColors.textPrimary,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildInfoChip(String label, String value) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -435,19 +699,66 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
       ],
     );
   }
-
-  String _resolvePatientName(Map<String, dynamic>? data, String fallbackName) {
-    if (data == null) return fallbackName;
-    final first = data['name']?.toString().trim() ?? '';
-    final last = data['surname']?.toString().trim() ?? '';
-    final combined = (first + ' ' + last).trim();
-    if (combined.isNotEmpty) return combined;
-    if (last.isNotEmpty) return last;
-    if (first.isNotEmpty) return first;
-    return fallbackName;
-  }
 }
 
+class _ScheduleCard extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: buildSurfaceCardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Upcoming treatments',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 16),
+          ...[
+            _AppointmentRow(
+              date: '20 Nov',
+              title: 'Implant planning session',
+              meta: 'Dr. Emily Ross - Room 4',
+              highlight: true,
+            ),
+            _AppointmentRow(
+              date: '04 Dec',
+              title: 'Crown placement & hygiene',
+              meta: 'Dr. Gomez - Room 1',
+            ),
+            _AppointmentRow(
+              date: '11 Jan',
+              title: 'Follow-up & whitening',
+              meta: 'Dr. Emily Ross - Room 2',
+            ),
+          ],
+          const SizedBox(height: 24),
+          ElevatedButton.icon(
+            onPressed: () {},
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.white.withOpacity(0.08),
+              foregroundColor: AppColors.textPrimary,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(999),
+              ),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 22,
+                vertical: 14,
+              ),
+            ),
+            icon: const Icon(Icons.add),
+            label: const Text('Schedule new appointment'),
+          ),
+        ],
+      ),
+    );
+  }
+}
 class _DentalChartSection extends StatelessWidget {
   final Map<String, ToothCondition> plan;
   final ToothCondition? selectedCondition;

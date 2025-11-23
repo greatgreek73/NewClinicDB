@@ -21,22 +21,45 @@ Future<void> main() async {
 
   SystemChrome.setSystemUIOverlayStyle(kClinicOverlayStyle);
 
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  String? firebaseInitError;
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
 
-  FirebaseFirestore.instance.settings = const Settings(
-    persistenceEnabled: true,
-  );
+    FirebaseFirestore.instance.settings = const Settings(
+      persistenceEnabled: true,
+    );
+  } catch (error, stack) {
+    firebaseInitError = error.toString();
+    // Keep running the app even if Firebase fails to init so we don't get a black screen.
+    // ignore: avoid_print
+    print('Firebase init failed: $error\n$stack');
+  }
 
-  runApp(const MyApp());
+  runApp(MyApp(firebaseInitError: firebaseInitError));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({Key? key}) : super(key: key);
+  final String? firebaseInitError;
+
+  const MyApp({Key? key, this.firebaseInitError}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
+    if (firebaseInitError != null) {
+      return MaterialApp(
+        title: 'Dental Clinic Dashboard',
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          brightness: Brightness.dark,
+          scaffoldBackgroundColor: AppColors.bg,
+          fontFamily: 'Inter',
+        ),
+        home: _FirebaseErrorScreen(message: firebaseInitError!),
+      );
+    }
+
     return MaterialApp(
       title: 'Dental Clinic Dashboard',
       debugShowCheckedModeBanner: false,
@@ -52,6 +75,49 @@ class MyApp extends StatelessWidget {
         PatientDetailsPage.routeName: (context) => const PatientDetailsPage(),
       },
       home: const ClinicDashboardPage(),
+    );
+  }
+}
+
+class _FirebaseErrorScreen extends StatelessWidget {
+  final String message;
+
+  const _FirebaseErrorScreen({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.bg,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off, color: AppColors.accent, size: 64),
+              const SizedBox(height: 16),
+              const Text(
+                'Firebase setup error',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'The app could not connect to Firebase. Please check google-services files, SHA-1/Apple Team IDs, and Play Services availability.\n\nDetails:\n$message',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.4,
+                  color: AppColors.textMuted.withOpacity(0.9),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

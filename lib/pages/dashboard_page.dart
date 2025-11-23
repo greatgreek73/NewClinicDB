@@ -2,9 +2,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../models/patient_bucket.dart';
 import '../theme/app_colors.dart';
 import '../theme/system_ui.dart';
 import '../utils/decorations.dart';
+import '../services/patient_bucket_service.dart';
 import 'add_patient_page.dart';
 import 'patient_details_page.dart';
 import 'search_page.dart';
@@ -21,6 +23,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
   bool _isLoadingPatients = false;
   int? _todayPatientsCount;
   String? _patientsError;
+  final PatientBucketService _bucketService = PatientBucketService();
 
   @override
   void initState() {
@@ -221,6 +224,8 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
         _buildPrimaryActions(context),
         const SizedBox(height: 24),
         _buildStatsGrid(),
+        const SizedBox(height: 20),
+        _buildBucketPanel(),
       ],
     );
   }
@@ -460,6 +465,124 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildBucketPanel() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppColors.surface.withOpacity(0.96),
+            AppColors.surfaceDark.withOpacity(0.96),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withOpacity(0.12)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.6),
+            blurRadius: 30,
+            spreadRadius: 12,
+            offset: const Offset(0, 18),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.shopping_basket_outlined,
+                color: AppColors.accent,
+              ),
+              const SizedBox(width: 10),
+              const Text(
+                'Patient baskets',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: Colors.white.withOpacity(0.08)),
+                ),
+                child: const Text(
+                  '1 -> 4 priority',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textMuted,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Tap a basket to drop down the patients inside. Use the patient page to move people between baskets.',
+            style: TextStyle(
+              fontSize: 13,
+              color: AppColors.textMuted.withOpacity(0.9),
+            ),
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: patientBuckets.map((bucket) {
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 10),
+                    child: StreamBuilder<List<PatientBucketEntry>>(
+                      stream: _bucketService.watchPatientsInBucket(bucket.id),
+                      builder: (context, snapshot) {
+                        final patients =
+                            snapshot.data ?? const <PatientBucketEntry>[];
+                        final isLoading =
+                            snapshot.connectionState == ConnectionState.waiting &&
+                            !snapshot.hasData;
+
+                        return _DashboardBucketCard(
+                          bucket: bucket,
+                          patients: patients,
+                          isLoading: isLoading,
+                          onTap: () => _openBucketList(bucket),
+                        );
+                      },
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openBucketList(PatientBucketDefinition bucket) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return _BucketPatientsSheet(
+          bucket: bucket,
+          stream: _bucketService.watchPatientsInBucket(bucket.id),
+        );
+      },
     );
   }
 
@@ -760,6 +883,452 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _DashboardBucketCard extends StatelessWidget {
+  final PatientBucketDefinition bucket;
+  final List<PatientBucketEntry> patients;
+  final bool isLoading;
+  final VoidCallback onTap;
+
+  const _DashboardBucketCard({
+    required this.bucket,
+    required this.patients,
+    required this.isLoading,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final baseColor = bucket.color;
+    final preview = patients.take(3).toList();
+    final remaining = patients.length - preview.length;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 190,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              baseColor.withOpacity(0.2),
+              AppColors.surfaceDark.withOpacity(0.95),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: baseColor.withOpacity(0.6)),
+          boxShadow: [
+            BoxShadow(
+              color: baseColor.withOpacity(0.4),
+              blurRadius: 28,
+              spreadRadius: 8,
+              offset: const Offset(0, 14),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white.withOpacity(0.1)),
+                  ),
+                  child: Icon(
+                    bucket.icon,
+                    size: 18,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        bucket.title,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        bucket.description,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: AppColors.textMuted.withOpacity(0.9),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.white.withOpacity(0.14)),
+                  ),
+                  child: Text(
+                    '${patients.length}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: List.generate(4, (index) {
+                final isCurrent = index + 1 == bucket.id;
+                final opacity = isCurrent ? 0.9 : 0.25;
+                return Padding(
+                  padding: EdgeInsets.only(right: index == 3 ? 0 : 6),
+                  child: Icon(
+                    Icons.shopping_basket_rounded,
+                    size: 16,
+                    color: baseColor.withOpacity(opacity),
+                  ),
+                );
+              }),
+            ),
+            const SizedBox(height: 10),
+            if (isLoading)
+              LinearProgressIndicator(
+                minHeight: 4,
+                valueColor: AlwaysStoppedAnimation(baseColor),
+                backgroundColor: Colors.white.withOpacity(0.08),
+              )
+            else if (patients.isEmpty)
+              Text(
+                'No patients in this basket yet.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textMuted.withOpacity(0.85),
+                ),
+              )
+            else
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  ...preview.map((patient) => Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Colors.white.withOpacity(0.08),
+                          ),
+                        ),
+                        child: Text(
+                          patient.title,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                      )),
+                  if (remaining > 0)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: baseColor.withOpacity(0.18),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: baseColor.withOpacity(0.35),
+                        ),
+                      ),
+                      child: Text(
+                        '+$remaining more',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            const SizedBox(height: 12),
+            Text(
+              'Tap to view the full list',
+              style: TextStyle(
+                fontSize: 12,
+                color: AppColors.textMuted.withOpacity(0.85),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BucketPatientsSheet extends StatelessWidget {
+  final PatientBucketDefinition bucket;
+  final Stream<List<PatientBucketEntry>> stream;
+
+  const _BucketPatientsSheet({
+    required this.bucket,
+    required this.stream,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, 16, 16, bottomPadding + 16),
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              AppColors.surfaceDark.withOpacity(0.98),
+              AppColors.surface.withOpacity(0.98),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: Colors.white.withOpacity(0.12)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.55),
+              blurRadius: 50,
+              spreadRadius: 18,
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 46,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              StreamBuilder<List<PatientBucketEntry>>(
+                stream: stream,
+                builder: (context, snapshot) {
+                  final patients = snapshot.data ?? const <PatientBucketEntry>[];
+                  final isLoading =
+                      snapshot.connectionState == ConnectionState.waiting &&
+                      !snapshot.hasData;
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: Colors.white.withOpacity(0.1),
+                              ),
+                            ),
+                            child: Icon(
+                              bucket.icon,
+                              color: bucket.color,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                bucket.title,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                              Text(
+                                'Patients in basket ${bucket.id}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: AppColors.textMuted.withOpacity(0.85),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const Spacer(),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: bucket.color.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: bucket.color.withOpacity(0.35),
+                              ),
+                            ),
+                            child: Text(
+                              '${patients.length}',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: bucket.color.withOpacity(0.9),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      if (isLoading)
+                        LinearProgressIndicator(
+                          minHeight: 4,
+                          valueColor: AlwaysStoppedAnimation(bucket.color),
+                          backgroundColor: Colors.white.withOpacity(0.08),
+                        )
+                      else if (patients.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          child: Text(
+                            'No patients are assigned here yet.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: AppColors.textMuted.withOpacity(0.85),
+                            ),
+                          ),
+                        )
+                      else
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxHeight: 420),
+                          child: ListView.separated(
+                            shrinkWrap: true,
+                            physics: const BouncingScrollPhysics(),
+                            itemBuilder: (context, index) {
+                              final patient = patients[index];
+                              return GestureDetector(
+                                onTap: () {
+                                  Navigator.of(context).pop();
+                                  Navigator.of(context).pushNamed(
+                                    PatientDetailsPage.routeName,
+                                    arguments: PatientDetailsArgs(
+                                      patientId: patient.id,
+                                      displayName: patient.title,
+                                    ),
+                                  );
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.05),
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(
+                                      color: Colors.white.withOpacity(0.08),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      CircleAvatar(
+                                        radius: 18,
+                                        backgroundColor:
+                                            bucket.color.withOpacity(0.15),
+                                        child: Text(
+                                          patient.title.isNotEmpty
+                                              ? patient.title[0].toUpperCase()
+                                              : '?',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                            color: AppColors.textPrimary,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              patient.title,
+                                              style: const TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w600,
+                                                color: AppColors.textPrimary,
+                                              ),
+                                            ),
+                                            if (patient.subtitle.isNotEmpty)
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                  top: 4,
+                                                ),
+                                                child: Text(
+                                                  patient.subtitle,
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: AppColors.textMuted
+                                                        .withOpacity(0.85),
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                      const Icon(
+                                        Icons.chevron_right,
+                                        color: AppColors.textMuted,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 10),
+                            itemCount: patients.length,
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
