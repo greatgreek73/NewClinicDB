@@ -1,13 +1,14 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/patient_bucket.dart';
+import '../services/supabase_client.dart';
 import '../theme/app_colors.dart';
 import '../theme/system_ui.dart';
 import '../utils/decorations.dart';
 import '../services/patient_bucket_service.dart';
 import 'add_patient_page.dart';
+import 'patient_3d_graph_page.dart';
 import 'patient_details_page.dart';
 import 'search_page.dart';
 
@@ -38,29 +39,32 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
     });
 
     try {
+      final client = maybeSupabaseClient;
+      if (client == null) {
+        setState(() {
+          _patientsError = 'Supabase is not configured';
+          _todayPatientsCount = null;
+        });
+        return;
+      }
+
       final now = DateTime.now();
       final startOfDay = DateTime(now.year, now.month, now.day);
       final endOfDay = startOfDay.add(const Duration(days: 1));
 
-      final query = FirebaseFirestore.instance
-          .collection('treatments')
-          .where(
-            'date',
-            isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay),
-          )
-          .where(
-            'date',
-            isLessThan: Timestamp.fromDate(endOfDay),
-          );
-
-      final snapshot = await query.get();
+      final snapshot = await client
+          .from('treatments')
+          .select('id,patient_id,date')
+          .gte('date', startOfDay.toUtc().toIso8601String())
+          .lt('date', endOfDay.toUtc().toIso8601String());
 
       final uniquePatients = <String>{};
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        final rawId = data['patientId'] ?? data['patient_id'];
+      for (final item in (snapshot as List)) {
+        final data = Map<String, dynamic>.from(item as Map);
+        final rawId = data['patient_id'];
         final id = rawId?.toString().trim();
-        uniquePatients.add(id?.isNotEmpty == true ? id! : doc.id);
+        final fallbackId = (data['id'] ?? '').toString().trim();
+        uniquePatients.add(id?.isNotEmpty == true ? id! : fallbackId);
       }
 
       setState(() {
@@ -99,14 +103,6 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
 
   @override
   Widget build(BuildContext context) {
-    final viewPadding = MediaQuery.of(context).viewPadding;
-    final contentPadding = EdgeInsets.only(
-      left: 24 + viewPadding.left,
-      right: 24 + viewPadding.right,
-      top: 24 + viewPadding.top,
-      bottom: 24 + viewPadding.bottom,
-    );
-
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: kClinicOverlayStyle,
       child: Scaffold(
@@ -126,35 +122,29 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
               stops: const [0.0, 0.45, 1.0],
             ),
           ),
-          child: Padding(
-            padding: contentPadding,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return SingleChildScrollView(
-                  child: Align(
-                    alignment: Alignment.center,
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: 1200,
-                        minHeight: constraints.maxHeight,
-                      ),
-                      child: Container(
-                        decoration: buildPrimaryPanelDecoration(),
-                        child: LayoutBuilder(
-                          builder: (context, innerConstraints) {
-                            if (innerConstraints.maxWidth > 900) {
-                              return _buildDesktopLayout(context);
-                            } else {
-                              return _buildMobileLayout(context);
-                            }
-                          },
-                        ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: Container(
+                    width: double.infinity,
+                    decoration: buildPrimaryPanelDecoration(),
+                    child: SafeArea(
+                      child: LayoutBuilder(
+                        builder: (context, innerConstraints) {
+                          if (innerConstraints.maxWidth > 900) {
+                            return _buildDesktopLayout(context);
+                          } else {
+                            return _buildMobileLayout(context);
+                          }
+                        },
                       ),
                     ),
                   ),
-                );
-              },
-            ),
+                ),
+              );
+            },
           ),
         ),
       ),
@@ -167,15 +157,9 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            flex: 11,
-            child: _buildLeftColumn(context),
-          ),
+          Expanded(flex: 11, child: _buildLeftColumn(context)),
           const SizedBox(width: 32),
-          Expanded(
-            flex: 10,
-            child: _buildRightColumn(),
-          ),
+          Expanded(flex: 10, child: _buildRightColumn()),
         ],
       ),
     );
@@ -231,6 +215,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
   }
 
   Widget _buildPrimaryActions(BuildContext context) {
+    const isFlutterTest = bool.fromEnvironment('FLUTTER_TEST');
     return Wrap(
       spacing: 12,
       runSpacing: 12,
@@ -239,23 +224,34 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
           context: context,
           label: 'Search',
           icon: Icons.search_rounded,
-          onPressed: () =>
-              Navigator.of(context).pushNamed(SearchPage.routeName),
+          onPressed:
+              () => Navigator.of(context).pushNamed(SearchPage.routeName),
         ),
         _buildActionButton(
           context: context,
           label: 'Add patient',
           icon: Icons.person_add_alt_1_rounded,
-          onPressed: () =>
-              Navigator.of(context).pushNamed(AddPatientPage.routeName),
+          onPressed:
+              () => Navigator.of(context).pushNamed(AddPatientPage.routeName),
         ),
         _buildActionButton(
           context: context,
           label: 'Patient profile',
           icon: Icons.badge_outlined,
-          onPressed: () =>
-              Navigator.of(context).pushNamed(PatientDetailsPage.routeName),
+          onPressed:
+              () =>
+                  Navigator.of(context).pushNamed(PatientDetailsPage.routeName),
         ),
+        if (!isFlutterTest)
+          _buildActionButton(
+            context: context,
+            label: '3D map',
+            icon: Icons.view_in_ar_rounded,
+            onPressed:
+                () => Navigator.of(
+                  context,
+                ).pushNamed(Patient3DGraphPage.routeName),
+          ),
       ],
     );
   }
@@ -277,18 +273,13 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
           padding: const EdgeInsets.symmetric(horizontal: 24),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(999),
-            side: BorderSide(
-              color: Colors.white.withOpacity(0.15),
-            ),
+            side: BorderSide(color: Colors.white.withOpacity(0.15)),
           ),
         ),
         icon: Icon(icon, size: 20),
         label: Text(
           label,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-          ),
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
         ),
       ),
     );
@@ -299,9 +290,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
       decoration: BoxDecoration(
         color: AppColors.surfaceDark.withOpacity(0.9),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: Colors.white.withOpacity(0.15),
-        ),
+        border: Border.all(color: Colors.white.withOpacity(0.15)),
       ),
       padding: const EdgeInsets.all(4),
       child: Row(
@@ -324,16 +313,14 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
         decoration: BoxDecoration(
-          gradient: selected
-              ? LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    AppColors.accentStrong,
-                    AppColors.accent,
-                  ],
-                )
-              : null,
+          gradient:
+              selected
+                  ? LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [AppColors.accentStrong, AppColors.accent],
+                  )
+                  : null,
           color: selected ? null : Colors.transparent,
           borderRadius: BorderRadius.circular(999),
         ),
@@ -365,11 +352,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
           value: '12',
           subtitle: '3 in progress',
         ),
-        _buildStatCard(
-          title: 'Canceled',
-          value: '2',
-          subtitle: 'No-shows: 1',
-        ),
+        _buildStatCard(title: 'Canceled', value: '2', subtitle: 'No-shows: 1'),
         _buildStatCard(
           title: 'Revenue today',
           value: '\$4,380',
@@ -390,44 +373,46 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
       child: Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          gradient: highlighted
-              ? LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    AppColors.accentStrong.withOpacity(0.95),
-                    AppColors.accent.withOpacity(0.85),
-                  ],
-                )
-              : LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    AppColors.surface.withOpacity(0.95),
-                    AppColors.surfaceDark.withOpacity(0.98),
-                  ],
-                ),
+          gradient:
+              highlighted
+                  ? LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      AppColors.accentStrong.withOpacity(0.95),
+                      AppColors.accent.withOpacity(0.85),
+                    ],
+                  )
+                  : LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      AppColors.surface.withOpacity(0.95),
+                      AppColors.surfaceDark.withOpacity(0.98),
+                    ],
+                  ),
           borderRadius: BorderRadius.circular(24),
           border: Border.all(
             color: Colors.white.withOpacity(highlighted ? 0.22 : 0.12),
           ),
-          boxShadow: highlighted
-              ? [
-                  BoxShadow(
-                    color: AppColors.accentStrong.withOpacity(0.6),
-                    blurRadius: 40,
-                    spreadRadius: 12,
-                    offset: const Offset(0, 18),
-                  ),
-                ]
-              : [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.7),
-                    blurRadius: 30,
-                    spreadRadius: 10,
-                    offset: const Offset(0, 18),
-                  ),
-                ],
+          boxShadow:
+              highlighted
+                  ? [
+                    BoxShadow(
+                      color: AppColors.accentStrong.withOpacity(0.6),
+                      blurRadius: 40,
+                      spreadRadius: 12,
+                      offset: const Offset(0, 18),
+                    ),
+                  ]
+                  : [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.7),
+                      blurRadius: 30,
+                      spreadRadius: 10,
+                      offset: const Offset(0, 18),
+                    ),
+                  ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -437,9 +422,10 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
               style: TextStyle(
                 fontSize: 11,
                 letterSpacing: 1.6,
-                color: highlighted
-                    ? AppColors.bg.withOpacity(0.86)
-                    : AppColors.textMuted.withOpacity(0.9),
+                color:
+                    highlighted
+                        ? AppColors.bg.withOpacity(0.86)
+                        : AppColors.textMuted.withOpacity(0.9),
               ),
             ),
             const SizedBox(height: 8),
@@ -457,9 +443,10 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
               subtitle,
               style: TextStyle(
                 fontSize: 12,
-                color: highlighted
-                    ? AppColors.bg.withOpacity(0.85)
-                    : AppColors.textMuted.withOpacity(0.9),
+                color:
+                    highlighted
+                        ? AppColors.bg.withOpacity(0.85)
+                        : AppColors.textMuted.withOpacity(0.9),
               ),
             ),
           ],
@@ -512,7 +499,10 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
               ),
               const Spacer(),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.06),
                   borderRadius: BorderRadius.circular(999),
@@ -520,10 +510,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
                 ),
                 child: const Text(
                   '1 -> 4 priority',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: AppColors.textMuted,
-                  ),
+                  style: TextStyle(fontSize: 11, color: AppColors.textMuted),
                 ),
               ),
             ],
@@ -537,35 +524,44 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
             ),
           ),
           const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: patientBuckets.map((bucket) {
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 10),
-                    child: StreamBuilder<List<PatientBucketEntry>>(
-                      stream: _bucketService.watchPatientsInBucket(bucket.id),
-                      builder: (context, snapshot) {
-                        final patients =
-                            snapshot.data ?? const <PatientBucketEntry>[];
-                        final isLoading =
-                            snapshot.connectionState == ConnectionState.waiting &&
-                            !snapshot.hasData;
+          LayoutBuilder(
+            builder: (context, constraints) {
+              const spacing = 12.0;
+              final maxWidth = constraints.maxWidth;
+              final columns = maxWidth >= 760 ? 4 : 2;
+              final itemWidth = (maxWidth - spacing * (columns - 1)) / columns;
 
-                        return _DashboardBucketCard(
-                          bucket: bucket,
-                          patients: patients,
-                          isLoading: isLoading,
-                          onTap: () => _openBucketList(bucket),
-                        );
-                      },
-                    ),
-                  );
-                }).toList(),
-              ),
-            ),
+              return Wrap(
+                spacing: spacing,
+                runSpacing: spacing,
+                children:
+                    patientBuckets.map((bucket) {
+                      return SizedBox(
+                        width: itemWidth,
+                        child: StreamBuilder<List<PatientBucketEntry>>(
+                          stream: _bucketService.watchPatientsInBucket(
+                            bucket.id,
+                          ),
+                          builder: (context, snapshot) {
+                            final patients =
+                                snapshot.data ?? const <PatientBucketEntry>[];
+                            final isLoading =
+                                snapshot.connectionState ==
+                                    ConnectionState.waiting &&
+                                !snapshot.hasData;
+
+                            return _DashboardBucketCard(
+                              bucket: bucket,
+                              patients: patients,
+                              isLoading: isLoading,
+                              onTap: () => _openBucketList(bucket),
+                            );
+                          },
+                        ),
+                      );
+                    }).toList(),
+              );
+            },
           ),
         ],
       ),
@@ -592,15 +588,10 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [
-            AppColors.surface,
-            AppColors.surfaceDark,
-          ],
+          colors: [AppColors.surface, AppColors.surfaceDark],
         ),
         borderRadius: BorderRadius.circular(30),
-        border: Border.all(
-          color: Colors.white.withOpacity(0.12),
-        ),
+        border: Border.all(color: Colors.white.withOpacity(0.12)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.9),
@@ -677,9 +668,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
           decoration: BoxDecoration(
             color: AppColors.surfaceDark,
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: Colors.white.withOpacity(0.18),
-            ),
+            border: Border.all(color: Colors.white.withOpacity(0.18)),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -692,10 +681,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
               const SizedBox(width: 8),
               Text(
                 'Today, 09:00–18:00',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textMuted,
-                ),
+                style: TextStyle(fontSize: 12, color: AppColors.textMuted),
               ),
             ],
           ),
@@ -709,9 +695,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
       decoration: BoxDecoration(
         color: AppColors.surfaceDark.withOpacity(0.9),
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: Colors.white.withOpacity(0.14),
-        ),
+        border: Border.all(color: Colors.white.withOpacity(0.14)),
       ),
       padding: const EdgeInsets.all(18),
       child: Column(
@@ -738,9 +722,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
             room: 'Room 3',
           ),
           const SizedBox(height: 18),
-          Divider(
-            color: Colors.white.withOpacity(0.12),
-          ),
+          Divider(color: Colors.white.withOpacity(0.12)),
           const SizedBox(height: 10),
           Row(
             children: [
@@ -780,21 +762,23 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: important
-              ? [
-                  AppColors.surface.withOpacity(0.98),
-                  AppColors.surfaceDark.withOpacity(0.95),
-                ]
-              : [
-                  AppColors.surfaceDark.withOpacity(0.94),
-                  AppColors.surfaceDark.withOpacity(0.98),
-                ],
+          colors:
+              important
+                  ? [
+                    AppColors.surface.withOpacity(0.98),
+                    AppColors.surfaceDark.withOpacity(0.95),
+                  ]
+                  : [
+                    AppColors.surfaceDark.withOpacity(0.94),
+                    AppColors.surfaceDark.withOpacity(0.98),
+                  ],
         ),
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: important
-              ? AppColors.accentSoft.withOpacity(0.9)
-              : Colors.white.withOpacity(0.12),
+          color:
+              important
+                  ? AppColors.accentSoft.withOpacity(0.9)
+                  : Colors.white.withOpacity(0.12),
         ),
       ),
       child: Row(
@@ -802,16 +786,9 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  AppColors.bgMid,
-                  AppColors.bg,
-                ],
-              ),
+              gradient: LinearGradient(colors: [AppColors.bgMid, AppColors.bg]),
               borderRadius: BorderRadius.circular(999),
-              border: Border.all(
-                color: Colors.white.withOpacity(0.22),
-              ),
+              border: Border.all(color: Colors.white.withOpacity(0.22)),
             ),
             child: Text(
               time,
@@ -838,10 +815,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
                 const SizedBox(height: 4),
                 Text(
                   procedure,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textMuted,
-                  ),
+                  style: TextStyle(fontSize: 12, color: AppColors.textMuted),
                 ),
               ],
             ),
@@ -852,16 +826,15 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
             children: [
               Text(
                 room,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textMuted,
-                ),
+                style: TextStyle(fontSize: 12, color: AppColors.textMuted),
               ),
               if (important) ...[
                 const SizedBox(height: 4),
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       colors: [
@@ -873,10 +846,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
                   ),
                   child: const Text(
                     'New patient',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: AppColors.bg,
-                    ),
+                    style: TextStyle(fontSize: 11, color: AppColors.bg),
                   ),
                 ),
               ],
@@ -904,8 +874,6 @@ class _DashboardBucketCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final baseColor = bucket.color;
-    final preview = patients.take(3).toList();
-    final remaining = patients.length - preview.length;
 
     return GestureDetector(
       onTap: onTap,
@@ -932,155 +900,50 @@ class _DashboardBucketCard extends StatelessWidget {
             ),
           ],
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white.withOpacity(0.1)),
-                  ),
-                  child: Icon(
-                    bucket.icon,
-                    size: 18,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        bucket.title,
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        bucket.description,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: AppColors.textMuted.withOpacity(0.9),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 5,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.white.withOpacity(0.14)),
-                  ),
-                  child: Text(
-                    '${patients.length}',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                ),
-              ],
+            Container(
+              width: 46,
+              height: 46,
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withOpacity(0.1)),
+              ),
+              child: Icon(
+                Icons.shopping_basket_rounded,
+                size: 22,
+                color: baseColor,
+              ),
             ),
-            const SizedBox(height: 10),
-            Row(
-              children: List.generate(4, (index) {
-                final isCurrent = index + 1 == bucket.id;
-                final opacity = isCurrent ? 0.9 : 0.25;
-                return Padding(
-                  padding: EdgeInsets.only(right: index == 3 ? 0 : 6),
-                  child: Icon(
-                    Icons.shopping_basket_rounded,
-                    size: 16,
-                    color: baseColor.withOpacity(opacity),
-                  ),
-                );
-              }),
-            ),
-            const SizedBox(height: 10),
-            if (isLoading)
-              LinearProgressIndicator(
-                minHeight: 4,
-                valueColor: AlwaysStoppedAnimation(baseColor),
-                backgroundColor: Colors.white.withOpacity(0.08),
-              )
-            else if (patients.isEmpty)
-              Text(
-                'No patients in this basket yet.',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textMuted.withOpacity(0.85),
-                ),
-              )
-            else
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  ...preview.map((patient) => Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.08),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Colors.white.withOpacity(0.08),
+            Container(
+              width: 46,
+              height: 46,
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withOpacity(0.14)),
+              ),
+              child: Center(
+                child:
+                    isLoading
+                        ? SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation(baseColor),
                           ),
-                        ),
-                        child: Text(
-                          patient.title,
+                        )
+                        : Text(
+                          '${patients.length}',
                           style: const TextStyle(
-                            fontSize: 12,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
                             color: AppColors.textPrimary,
                           ),
                         ),
-                      )),
-                  if (remaining > 0)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: baseColor.withOpacity(0.18),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: baseColor.withOpacity(0.35),
-                        ),
-                      ),
-                      child: Text(
-                        '+$remaining more',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            const SizedBox(height: 12),
-            Text(
-              'Tap to view the full list',
-              style: TextStyle(
-                fontSize: 12,
-                color: AppColors.textMuted.withOpacity(0.85),
               ),
             ),
           ],
@@ -1094,10 +957,7 @@ class _BucketPatientsSheet extends StatelessWidget {
   final PatientBucketDefinition bucket;
   final Stream<List<PatientBucketEntry>> stream;
 
-  const _BucketPatientsSheet({
-    required this.bucket,
-    required this.stream,
-  });
+  const _BucketPatientsSheet({required this.bucket, required this.stream});
 
   @override
   Widget build(BuildContext context) {
@@ -1145,7 +1005,8 @@ class _BucketPatientsSheet extends StatelessWidget {
               StreamBuilder<List<PatientBucketEntry>>(
                 stream: stream,
                 builder: (context, snapshot) {
-                  final patients = snapshot.data ?? const <PatientBucketEntry>[];
+                  final patients =
+                      snapshot.data ?? const <PatientBucketEntry>[];
                   final isLoading =
                       snapshot.connectionState == ConnectionState.waiting &&
                       !snapshot.hasData;
@@ -1165,10 +1026,7 @@ class _BucketPatientsSheet extends StatelessWidget {
                                 color: Colors.white.withOpacity(0.1),
                               ),
                             ),
-                            child: Icon(
-                              bucket.icon,
-                              color: bucket.color,
-                            ),
+                            child: Icon(bucket.icon, color: bucket.color),
                           ),
                           const SizedBox(width: 12),
                           Column(
@@ -1265,8 +1123,8 @@ class _BucketPatientsSheet extends StatelessWidget {
                                     children: [
                                       CircleAvatar(
                                         radius: 18,
-                                        backgroundColor:
-                                            bucket.color.withOpacity(0.15),
+                                        backgroundColor: bucket.color
+                                            .withOpacity(0.15),
                                         child: Text(
                                           patient.title.isNotEmpty
                                               ? patient.title[0].toUpperCase()
@@ -1317,8 +1175,8 @@ class _BucketPatientsSheet extends StatelessWidget {
                                 ),
                               );
                             },
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(height: 10),
+                            separatorBuilder:
+                                (_, __) => const SizedBox(height: 10),
                             itemCount: patients.length,
                           ),
                         ),

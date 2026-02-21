@@ -1,0 +1,755 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Patient 3D Graph</title>
+    <style>
+      :root {
+        --bg-1: #0b1220;
+        --bg-2: #111827;
+        --panel: rgba(255, 255, 255, 0.08);
+        --panel-border: rgba(255, 255, 255, 0.14);
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.68);
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto,
+          Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        background: radial-gradient(1200px 900px at 20% 10%, #2b1b4b, transparent),
+          radial-gradient(1200px 900px at 80% 20%, #1b3b6b, transparent),
+          linear-gradient(140deg, var(--bg-1), var(--bg-2));
+        color: var(--text);
+      }
+
+      #graph-container {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+
+      .chip-row {
+        position: absolute;
+        top: 14px;
+        left: 14px;
+        right: 14px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+        pointer-events: none;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border-radius: 999px;
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        backdrop-filter: blur(8px);
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+      }
+
+      .tooltip {
+        position: absolute;
+        left: 16px;
+        top: 62px;
+        max-width: 320px;
+        padding: 12px 14px;
+        border-radius: 16px;
+        background: rgba(17, 24, 39, 0.82);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        box-shadow: 0 22px 50px rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(10px);
+        display: none;
+      }
+
+      .tooltip .title {
+        font-weight: 700;
+        font-size: 14px;
+        color: var(--text);
+      }
+
+      .tooltip .sub {
+        margin-top: 4px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .badge {
+        display: inline-block;
+        margin-top: 8px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 11px;
+        color: #0b1220;
+        font-weight: 700;
+      }
+
+      .corner-controls {
+        position: absolute;
+        right: 14px;
+        bottom: 14px;
+        display: flex;
+        gap: 10px;
+      }
+
+      .btn {
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.9);
+        font-size: 18px;
+        font-weight: 800;
+        cursor: pointer;
+        backdrop-filter: blur(10px);
+      }
+
+      .btn:active {
+        transform: scale(0.98);
+      }
+
+      .loading {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.18);
+        color: rgba(255, 255, 255, 0.9);
+        font-weight: 650;
+        letter-spacing: 0.2px;
+      }
+
+      .hint {
+        position: absolute;
+        right: 14px;
+        top: 14px;
+        text-align: right;
+        padding: 10px 12px;
+        border-radius: 16px;
+        background: rgba(17, 24, 39, 0.55);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: rgba(255, 255, 255, 0.75);
+        font-size: 12px;
+        line-height: 1.25;
+        backdrop-filter: blur(10px);
+        pointer-events: none;
+      }
+
+      .hint strong {
+        color: rgba(255, 255, 255, 0.9);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="graph-container">
+      <div class="chip-row" id="legend"></div>
+      <div class="hint">
+        <div><strong>Drag</strong> — rotate</div>
+        <div><strong>Wheel</strong> — zoom</div>
+        <div><strong>Hover</strong> — details</div>
+      </div>
+      <div class="tooltip" id="tooltip"></div>
+      <div class="corner-controls">
+        <button class="btn" id="zoom-in" aria-label="Zoom in">+</button>
+        <button class="btn" id="zoom-out" aria-label="Zoom out">−</button>
+      </div>
+      <div class="loading" id="loading">Loading 3D…</div>
+    </div>
+
+    <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+    <script>
+      const STATUS = {
+        scheduled: { label: "Scheduled", color: 0x3b82f6 },
+        urgent: { label: "Urgent", color: 0xef4444 },
+        debt: { label: "Debt", color: 0xf97316 },
+        ok: { label: "OK", color: 0x22c55e },
+        missed: { label: "Missed", color: 0xeab308 },
+      };
+
+      const DEFAULT_FAMILIES = [
+        {
+          id: "priority-1",
+          name: "Priority I",
+          color: 0xff7a1a,
+          patients: [
+            { id: "1", name: "Konstantin B.", status: "scheduled" },
+            { id: "2", name: "Olga B.", status: "debt" },
+          ],
+        },
+        {
+          id: "priority-2",
+          name: "Priority II",
+          color: 0xffb347,
+          patients: [
+            { id: "3", name: "Patient A", status: "urgent" },
+            { id: "4", name: "Patient B", status: "ok" },
+            { id: "5", name: "Patient C", status: "scheduled" },
+          ],
+        },
+        {
+          id: "priority-3",
+          name: "Priority III",
+          color: 0x6cd6a2,
+          patients: [
+            { id: "6", name: "Patient D", status: "ok" },
+            { id: "7", name: "Patient E", status: "ok" },
+            { id: "8", name: "Patient F", status: "debt" },
+            { id: "9", name: "Patient G", status: "ok" },
+          ],
+        },
+        {
+          id: "priority-4",
+          name: "Priority IV",
+          color: 0x78a0ff,
+          patients: [
+            { id: "10", name: "New 1", status: "ok" },
+            { id: "11", name: "New 2", status: "ok" },
+          ],
+        },
+      ];
+
+      let container;
+      let scene;
+      let camera;
+      let renderer;
+      let rootGroup;
+      let interactables = [];
+      let patientMeshes = [];
+      let isInitialized = false;
+      let currentFamilies = DEFAULT_FAMILIES;
+
+      const tooltipEl = document.getElementById("tooltip");
+      const loadingEl = document.getElementById("loading");
+      const legendEl = document.getElementById("legend");
+
+      const raycaster = new THREE.Raycaster();
+      const mouse = new THREE.Vector2();
+
+      let isDragging = false;
+      let prev = { x: 0, y: 0 };
+      let rotationY = 0;
+      let rotationX = 0;
+      let targetRotationY = 0;
+      let targetRotationX = 0;
+      let autoRotate = true;
+      let lastFrameMs = performance.now();
+
+      let graphOptions = {
+        autoRotateSpeed: 0.18,
+        dragSpeed: 0.01,
+        damping: 3.2,
+        minZoom: 6,
+        maxZoom: 22,
+        wheelZoomSpeed: 0.01,
+        pulseSpeed: 0.002,
+        pulseAmplitude: 0.05,
+      };
+
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+      }
+
+      function toNumber(value, fallback) {
+        const n = typeof value === "number" ? value : parseFloat(value);
+        return Number.isFinite(n) ? n : fallback;
+      }
+
+      function applyOptions(options) {
+        if (!options || typeof options !== "object") return;
+
+        if (typeof options.autoRotate === "boolean") {
+          autoRotate = options.autoRotate;
+        }
+
+        graphOptions = {
+          ...graphOptions,
+          autoRotateSpeed: toNumber(
+            options.autoRotateSpeed,
+            graphOptions.autoRotateSpeed
+          ),
+          dragSpeed: toNumber(options.dragSpeed, graphOptions.dragSpeed),
+          damping: toNumber(options.damping, graphOptions.damping),
+          minZoom: toNumber(options.minZoom, graphOptions.minZoom),
+          maxZoom: toNumber(options.maxZoom, graphOptions.maxZoom),
+          wheelZoomSpeed: toNumber(
+            options.wheelZoomSpeed,
+            graphOptions.wheelZoomSpeed
+          ),
+          pulseSpeed: toNumber(options.pulseSpeed, graphOptions.pulseSpeed),
+          pulseAmplitude: toNumber(
+            options.pulseAmplitude,
+            graphOptions.pulseAmplitude
+          ),
+        };
+      }
+
+      window.setGraphOptions = function (payload) {
+        try {
+          const options =
+            typeof payload === "string" ? JSON.parse(payload) : payload;
+          applyOptions(options);
+        } catch (e) {
+          console.error("setGraphOptions failed", e);
+        }
+      };
+
+      function computeFamilyPosition(index, total) {
+        if (total === 4) {
+          const preset = [
+            [-3, 0, 0],
+            [3, 1, 0],
+            [0, -2.5, 1],
+            [0, 2.5, -1],
+          ];
+          const p = preset[index] || [0, 0, 0];
+          return new THREE.Vector3(p[0], p[1], p[2]);
+        }
+
+        const angle = (index / Math.max(1, total)) * Math.PI * 2;
+        const radius = 3.2;
+        const y = Math.sin(angle * 2) * 0.7;
+        return new THREE.Vector3(
+          Math.cos(angle) * radius,
+          y,
+          Math.sin(angle) * radius * 0.65
+        );
+      }
+
+      function computePatientOffset(index, total) {
+        const safeTotal = Math.max(1, total);
+        const angle = (index / safeTotal) * Math.PI * 2;
+        const ring = 1.8 + (index % 3) * 0.25;
+        const y = ((index % 5) - 2) * 0.45;
+        return new THREE.Vector3(
+          Math.cos(angle) * ring,
+          y,
+          Math.sin(angle) * ring
+        );
+      }
+
+      function showTooltip(contentHtml) {
+        tooltipEl.innerHTML = contentHtml;
+        tooltipEl.style.display = "block";
+      }
+
+      function hideTooltip() {
+        tooltipEl.style.display = "none";
+        tooltipEl.innerHTML = "";
+      }
+
+      function updateLegend() {
+        const statusesInUse = new Set();
+        for (const fam of currentFamilies) {
+          for (const p of fam.patients || []) {
+            if (p && p.status && STATUS[p.status]) statusesInUse.add(p.status);
+          }
+        }
+
+        const ordered = ["scheduled", "urgent", "debt", "ok", "missed"].filter(
+          (s) => statusesInUse.has(s) || s === "scheduled" || s === "urgent" || s === "debt" || s === "ok"
+        );
+
+        legendEl.innerHTML = "";
+        for (const status of ordered) {
+          const meta = STATUS[status];
+          if (!meta) continue;
+          const chip = document.createElement("div");
+          chip.className = "chip";
+          const dot = document.createElement("span");
+          dot.className = "dot";
+          dot.style.background = "#" + meta.color.toString(16).padStart(6, "0");
+          const label = document.createElement("span");
+          label.textContent = meta.label;
+          chip.appendChild(dot);
+          chip.appendChild(label);
+          legendEl.appendChild(chip);
+        }
+      }
+
+      function disposeObject(obj) {
+        if (!obj) return;
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) {
+          if (Array.isArray(obj.material)) {
+            obj.material.forEach((m) => m && m.dispose && m.dispose());
+          } else if (obj.material.dispose) {
+            obj.material.dispose();
+          }
+        }
+      }
+
+      function rebuildGraph() {
+        if (!isInitialized) return;
+
+        hideTooltip();
+        updateLegend();
+
+        if (rootGroup) {
+          rootGroup.traverse((o) => disposeObject(o));
+          scene.remove(rootGroup);
+        }
+
+        rootGroup = new THREE.Group();
+        scene.add(rootGroup);
+        interactables = [];
+        patientMeshes = [];
+
+        const families = currentFamilies || [];
+
+        // Family spheres + patient spheres + links
+        families.forEach((family, familyIndex) => {
+          const familyPos = family.position
+            ? new THREE.Vector3(family.position[0], family.position[1], family.position[2])
+            : computeFamilyPosition(familyIndex, families.length);
+
+          const familySphere = new THREE.Mesh(
+            new THREE.SphereGeometry(1, 32, 32),
+            new THREE.MeshPhongMaterial({
+              color: family.color || 0x7c3aed,
+              shininess: 110,
+              transparent: true,
+              opacity: 0.92,
+            })
+          );
+          familySphere.position.copy(familyPos);
+          familySphere.userData = { type: "family", data: family };
+          rootGroup.add(familySphere);
+          interactables.push(familySphere);
+
+          const glow = new THREE.Mesh(
+            new THREE.SphereGeometry(1.16, 32, 32),
+            new THREE.MeshBasicMaterial({
+              color: family.color || 0x7c3aed,
+              transparent: true,
+              opacity: 0.18,
+            })
+          );
+          glow.position.copy(familyPos);
+          rootGroup.add(glow);
+
+          const patients = family.patients || [];
+          patients.forEach((patient, patientIndex) => {
+            const offset = patient.offset
+              ? new THREE.Vector3(patient.offset[0], patient.offset[1], patient.offset[2])
+              : computePatientOffset(patientIndex, patients.length);
+            const patientPos = familyPos.clone().add(offset);
+            const status = patient.status || "ok";
+            const color =
+              (STATUS[status] && STATUS[status].color) || STATUS.ok.color;
+
+            const patientSphere = new THREE.Mesh(
+              new THREE.SphereGeometry(0.38, 24, 24),
+              new THREE.MeshPhongMaterial({ color, shininess: 85 })
+            );
+            patientSphere.position.copy(patientPos);
+            patientSphere.userData = {
+              type: "patient",
+              data: patient,
+              family: family,
+            };
+            rootGroup.add(patientSphere);
+            interactables.push(patientSphere);
+            patientMeshes.push(patientSphere);
+
+            const line = new THREE.Line(
+              new THREE.BufferGeometry().setFromPoints([familyPos, patientPos]),
+              new THREE.LineBasicMaterial({
+                color: family.color || 0x9ca3af,
+                transparent: true,
+                opacity: 0.45,
+              })
+            );
+            rootGroup.add(line);
+          });
+        });
+
+        // Dashed connections between family centers
+        if (families.length >= 2) {
+          const edges = [];
+          if (families.length === 4) {
+            edges.push([0, 1], [1, 2], [2, 3], [3, 0], [0, 2]);
+          } else {
+            for (let i = 0; i < families.length - 1; i++) edges.push([i, i + 1]);
+          }
+
+          for (const [i, j] of edges) {
+            const fi = families[i];
+            const fj = families[j];
+            if (!fi || !fj) continue;
+            const pi = fi.position
+              ? new THREE.Vector3(fi.position[0], fi.position[1], fi.position[2])
+              : computeFamilyPosition(i, families.length);
+            const pj = fj.position
+              ? new THREE.Vector3(fj.position[0], fj.position[1], fj.position[2])
+              : computeFamilyPosition(j, families.length);
+            const geometry = new THREE.BufferGeometry().setFromPoints([pi, pj]);
+            const material = new THREE.LineDashedMaterial({
+              color: 0xa78bfa,
+              dashSize: 0.28,
+              gapSize: 0.16,
+              transparent: true,
+              opacity: 0.32,
+            });
+            const line = new THREE.Line(geometry, material);
+            line.computeLineDistances();
+            rootGroup.add(line);
+          }
+        }
+      }
+
+      function onPointerMove(event) {
+        if (!renderer) return;
+        if (isDragging) return;
+
+        const rect = renderer.domElement.getBoundingClientRect();
+        mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+        raycaster.setFromCamera(mouse, camera);
+        const intersects = raycaster.intersectObjects(interactables, false);
+
+        if (intersects.length <= 0) {
+          renderer.domElement.style.cursor = "grab";
+          hideTooltip();
+          return;
+        }
+
+        const obj = intersects[0].object;
+        renderer.domElement.style.cursor = "pointer";
+
+        if (obj.userData.type === "family") {
+          const fam = obj.userData.data;
+          const count = (fam && fam.patients && fam.patients.length) || 0;
+          showTooltip(
+            `<div class="title">${escapeHtml(fam.name || "Group")}</div>` +
+              `<div class="sub">Patients: ${count}</div>`
+          );
+          return;
+        }
+
+        if (obj.userData.type === "patient") {
+          const patient = obj.userData.data || {};
+          const family = obj.userData.family || {};
+          const status = patient.status || "ok";
+          const meta = STATUS[status] || STATUS.ok;
+          const badgeBg =
+            "#" + (meta.color || STATUS.ok.color).toString(16).padStart(6, "0");
+
+          const subtitle = patient.subtitle ? escapeHtml(patient.subtitle) : "";
+          showTooltip(
+            `<div class="title">${escapeHtml(patient.name || "Patient")}</div>` +
+              `<div class="sub">${escapeHtml(family.name || "")}</div>` +
+              (subtitle ? `<div class="sub">${subtitle}</div>` : "") +
+              `<span class="badge" style="background:${badgeBg}">${escapeHtml(
+                meta.label
+              )}</span>`
+          );
+          return;
+        }
+      }
+
+      function escapeHtml(str) {
+        return String(str)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function onPointerDown(e) {
+        if (!renderer) return;
+        isDragging = true;
+        autoRotate = false;
+        prev = { x: e.clientX, y: e.clientY };
+        renderer.domElement.style.cursor = "grabbing";
+        hideTooltip();
+      }
+
+      function onPointerUp() {
+        if (!renderer) return;
+        isDragging = false;
+        renderer.domElement.style.cursor = "grab";
+      }
+
+      function onPointerDrag(e) {
+        if (!isDragging) return;
+        const dx = e.clientX - prev.x;
+        const dy = e.clientY - prev.y;
+        targetRotationY += dx * graphOptions.dragSpeed;
+        targetRotationX += dy * graphOptions.dragSpeed;
+        targetRotationX = clamp(targetRotationX, -Math.PI / 3, Math.PI / 3);
+        prev = { x: e.clientX, y: e.clientY };
+      }
+
+      function zoom(delta) {
+        if (!camera) return;
+        camera.position.z = clamp(
+          camera.position.z + delta,
+          graphOptions.minZoom,
+          graphOptions.maxZoom
+        );
+      }
+
+      function onWheel(e) {
+        e.preventDefault();
+        zoom(e.deltaY * graphOptions.wheelZoomSpeed);
+      }
+
+      function animate(nowMs) {
+        requestAnimationFrame(animate);
+
+        const safeNow = typeof nowMs === "number" ? nowMs : performance.now();
+        let dt = (safeNow - lastFrameMs) / 1000;
+        lastFrameMs = safeNow;
+        if (!Number.isFinite(dt) || dt <= 0) dt = 0.016;
+        dt = Math.min(0.05, dt);
+
+        if (autoRotate) {
+          targetRotationY += graphOptions.autoRotateSpeed * dt;
+        }
+
+        const t = 1 - Math.exp(-graphOptions.damping * dt);
+        rotationY += (targetRotationY - rotationY) * t;
+        rotationX += (targetRotationX - rotationX) * t;
+
+        if (rootGroup) {
+          rootGroup.rotation.y = rotationY;
+          rootGroup.rotation.x = rotationX;
+        }
+
+        const time = safeNow * graphOptions.pulseSpeed;
+        patientMeshes.forEach((mesh, i) => {
+          const s = 1 + Math.sin(time + i) * graphOptions.pulseAmplitude;
+          mesh.scale.set(s, s, s);
+        });
+
+        renderer.render(scene, camera);
+      }
+
+      function handleResize() {
+        if (!container || !renderer || !camera) return;
+        const width = container.clientWidth || window.innerWidth;
+        const height = container.clientHeight || window.innerHeight;
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        renderer.setSize(width, height);
+      }
+
+      function init() {
+        container = document.getElementById("graph-container");
+        const width = container.clientWidth || window.innerWidth;
+        const height = container.clientHeight || window.innerHeight;
+
+        scene = new THREE.Scene();
+
+        camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000);
+        camera.position.set(0, 2, 12);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(width, height);
+        renderer.setPixelRatio(window.devicePixelRatio || 1);
+        container.appendChild(renderer.domElement);
+
+        const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambient);
+
+        const directional = new THREE.DirectionalLight(0xffffff, 0.9);
+        directional.position.set(5, 10, 7);
+        scene.add(directional);
+
+        const point = new THREE.PointLight(0xa78bfa, 0.6);
+        point.position.set(-5, -5, 5);
+        scene.add(point);
+
+        renderer.domElement.style.cursor = "grab";
+
+        renderer.domElement.addEventListener("pointermove", onPointerMove);
+        renderer.domElement.addEventListener("pointerdown", onPointerDown);
+        window.addEventListener("pointerup", onPointerUp);
+        renderer.domElement.addEventListener("pointermove", onPointerDrag);
+        renderer.domElement.addEventListener("wheel", onWheel, {
+          passive: false,
+        });
+
+        document.getElementById("zoom-in").addEventListener("click", () => {
+          zoom(-0.8);
+        });
+        document.getElementById("zoom-out").addEventListener("click", () => {
+          zoom(0.8);
+        });
+
+        window.addEventListener("resize", handleResize);
+
+        isInitialized = true;
+        rebuildGraph();
+        animate();
+
+        loadingEl.style.display = "none";
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: "graphReady" }, "*");
+          }
+        } catch (_) {}
+      }
+
+      function normalizeFamilies(payload) {
+        const families = Array.isArray(payload) ? payload : payload?.families;
+        if (!Array.isArray(families)) return DEFAULT_FAMILIES;
+        return families.map((f) => ({
+          id: f.id,
+          name: f.name,
+          color: typeof f.color === "number" ? f.color : parseInt(f.color, 10),
+          position: f.position,
+          patients: Array.isArray(f.patients) ? f.patients : [],
+        }));
+      }
+
+      window.setGraphData = function (payload) {
+        try {
+          const data =
+            typeof payload === "string" ? JSON.parse(payload) : payload;
+          if (data && typeof data === "object" && data.options) {
+            applyOptions(data.options);
+          }
+          currentFamilies = normalizeFamilies(data);
+          rebuildGraph();
+        } catch (e) {
+          console.error("setGraphData failed", e);
+        }
+      };
+
+      window.addEventListener("message", (event) => {
+        const msg = event.data;
+        if (!msg) return;
+        if (msg.type === "setGraphData") {
+          window.setGraphData(msg.payload);
+        }
+        if (msg.type === "setGraphOptions") {
+          window.setGraphOptions(msg.payload);
+        }
+      });
+
+      document.addEventListener("DOMContentLoaded", init);
+    </script>
+  </body>
+</html>

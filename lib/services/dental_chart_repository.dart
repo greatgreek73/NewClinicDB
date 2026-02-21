@@ -1,37 +1,24 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 import '../models/tooth_condition.dart';
+import 'id_generator.dart';
+import 'treatment_data_service.dart';
 
 class DentalChartRepository {
-  DentalChartRepository({FirebaseFirestore? firestore})
-      : _firestore = firestore ?? FirebaseFirestore.instance;
+  DentalChartRepository({TreatmentDataService? treatments})
+    : _treatments = treatments ?? TreatmentDataService();
 
-  final FirebaseFirestore _firestore;
-  final Set<String> _initializedPatients = {};
+  final TreatmentDataService _treatments;
 
-  DocumentReference<Map<String, dynamic>> _chartDoc(String patientId) {
-    return _firestore
-        .collection('patients')
-        .doc(patientId)
-        .collection('dentalChart')
-        .doc('current');
-  }
-
-  CollectionReference<Map<String, dynamic>> _historyCollection(
-    String patientId,
-  ) {
-    return _chartDoc(patientId).collection('history');
-  }
-
-  Stream<Map<String, ToothCondition>> watchChart(String patientId) async* {
-    await _ensureChartDoc(patientId);
-    yield* _chartDoc(patientId).snapshots().map(_mapSnapshotToPlan);
+  Stream<Map<String, ToothCondition>> watchChart(String patientId) {
+    return _treatments.watchAll().map((rows) {
+      final patientRows = _filterByPatient(rows, patientId);
+      return _buildPlanFromTreatments(patientRows);
+    });
   }
 
   Future<Map<String, ToothCondition>> loadChart(String patientId) async {
-    await _ensureChartDoc(patientId);
-    final snapshot = await _chartDoc(patientId).get();
-    return _mapSnapshotToPlan(snapshot);
+    final rows = await _treatments.fetchAll();
+    final patientRows = _filterByPatient(rows, patientId);
+    return _buildPlanFromTreatments(patientRows);
   }
 
   Future<void> setToothStatus(
@@ -43,33 +30,18 @@ class DentalChartRepository {
     final normalizedTooth = toothNumber.trim();
     if (normalizedTooth.isEmpty) return;
 
-    final payload = <String, Object?>{
-      'updatedAt': FieldValue.serverTimestamp(),
+    final payload = <String, dynamic>{
+      'id': generateTextId('treatment'),
+      'patient_id': patientId,
+      'tooth_number': [normalizedTooth],
+      'status': toothConditionToString(condition),
       'source': 'patient-details',
+      'date': DateTime.now().toUtc().toIso8601String(),
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+      if (updatedBy != null && updatedBy.isNotEmpty) 'updated_by': updatedBy,
     };
 
-    final path = 'teeth.$normalizedTooth';
-    if (condition == ToothCondition.healthy) {
-      payload[path] = FieldValue.delete();
-    } else {
-      payload[path] = toothConditionToString(condition);
-    }
-
-    if (updatedBy != null && updatedBy.isNotEmpty) {
-      payload['updatedBy'] = updatedBy;
-    }
-
-    await _chartDoc(patientId).set(payload, SetOptions(merge: true));
-    await _writeHistory(
-      patientId: patientId,
-      payload: {
-        'toothNumber': normalizedTooth,
-        'status': toothConditionToString(condition),
-        'updatedAt': FieldValue.serverTimestamp(),
-        if (updatedBy != null && updatedBy.isNotEmpty) 'updatedBy': updatedBy,
-        'source': 'patient-details',
-      },
-    );
+    await _treatments.insert(payload);
   }
 
   Future<void> setBulk(
@@ -78,187 +50,40 @@ class DentalChartRepository {
     String? updatedBy,
     String source = 'bulk-set',
   }) async {
-    final mapped = plan.map(
-      (key, value) => MapEntry(key, toothConditionToString(value)),
-    );
+    if (plan.isEmpty) return;
 
-    final payload = <String, Object?>{
-      'teeth': mapped,
-      'updatedAt': FieldValue.serverTimestamp(),
-      'source': source,
-    };
+    for (final entry in plan.entries) {
+      final tooth = entry.key.trim();
+      if (tooth.isEmpty) continue;
 
-    if (updatedBy != null && updatedBy.isNotEmpty) {
-      payload['updatedBy'] = updatedBy;
-    }
-
-    await _chartDoc(patientId).set(payload, SetOptions(merge: true));
-    await _writeHistory(
-      patientId: patientId,
-      payload: {
-        'status': 'bulk',
-        'teeth': mapped,
-        'updatedAt': FieldValue.serverTimestamp(),
-        if (updatedBy != null && updatedBy.isNotEmpty) 'updatedBy': updatedBy,
+      await _treatments.insert({
+        'id': generateTextId('treatment'),
+        'patient_id': patientId,
+        'tooth_number': [tooth],
+        'status': toothConditionToString(entry.value),
         'source': source,
-      },
-    );
-  }
-
-  Future<void> _ensureChartDoc(String patientId) async {
-    if (_initializedPatients.contains(patientId)) return;
-
-    final snapshot = await _chartDoc(patientId).get();
-    if (!snapshot.exists || snapshot.data()?['teeth'] == null) {
-      await _seedFromTreatments(patientId);
-    }
-
-    _initializedPatients.add(patientId);
-  }
-
-  Map<String, ToothCondition> _mapSnapshotToPlan(
-    DocumentSnapshot<Map<String, dynamic>> snapshot,
-  ) {
-    final data = snapshot.data();
-    final rawTeeth = data?['teeth'];
-    if (rawTeeth is! Map<String, dynamic>) return {};
-
-    final Map<String, ToothCondition> plan = {};
-    rawTeeth.forEach((key, value) {
-      final parsed = toothConditionFromString(value?.toString());
-      if (parsed != ToothCondition.healthy) {
-        plan[key] = parsed;
-      }
-    });
-    return plan;
-  }
-
-  Future<void> _writeHistory({
-    required String patientId,
-    required Map<String, Object?> payload,
-  }) async {
-    try {
-      await _historyCollection(patientId).add(payload);
-    } catch (_) {
-      // Do not break main flow if history cannot be written.
+        'date': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+        if (updatedBy != null && updatedBy.isNotEmpty) 'updated_by': updatedBy,
+      });
     }
   }
 
-  Future<Map<String, ToothCondition>> _seedFromTreatments(
-    String patientId,
-  ) async {
-    final Map<String, ToothCondition> collected = {};
-
-    final futures = await Future.wait([
-      _firestore
-          .collection('treatments')
-          .where('patientId', isEqualTo: patientId)
-          .limit(200)
-          .get(),
-      _firestore
-          .collection('treatments')
-          .where('patient_id', isEqualTo: patientId)
-          .limit(200)
-          .get(),
-    ]);
-
-    for (final snapshot in futures) {
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        final rawStatus = data['status']?.toString();
-        final unevaluatedStatus =
-            rawStatus != null ? toothConditionFromString(rawStatus) : null;
-        final status =
-            unevaluatedStatus == null || rawStatus == null
-                ? ToothCondition.treated
-                : unevaluatedStatus;
-
-        final rawTeeth = data['toothNumber'];
-        if (rawTeeth is Iterable) {
-          for (final tooth in rawTeeth) {
-            final toothKey = tooth?.toString().trim();
-            if (toothKey == null || toothKey.isEmpty) continue;
-            collected[toothKey] = status;
-          }
-        } else if (rawTeeth != null) {
-          final toothKey = rawTeeth.toString().trim();
-          if (toothKey.isNotEmpty) {
-            collected[toothKey] = status;
-          }
-        }
-      }
-    }
-
-    final doc = _chartDoc(patientId);
-    if (collected.isEmpty) {
-      await doc.set(
-        {
-          'teeth': {},
-          'updatedAt': FieldValue.serverTimestamp(),
-          'source': 'init-empty',
-        },
-        SetOptions(merge: true),
-      );
-      return {};
-    }
-
-    final mapped = collected.map(
-      (key, value) => MapEntry(key, toothConditionToString(value)),
-    );
-
-    await doc.set(
-      {
-        'teeth': mapped,
-        'updatedAt': FieldValue.serverTimestamp(),
-        'updatedBy': 'seed',
-        'source': 'treatments-import',
-      },
-      SetOptions(merge: true),
-    );
-
-    await _writeHistory(
-      patientId: patientId,
-      payload: {
-        'status': 'seed',
-        'teeth': mapped,
-        'updatedAt': FieldValue.serverTimestamp(),
-        'source': 'treatments-import',
-      },
-    );
-
-    return collected;
-  }
-
-  /// Stream: для конкретного пациента возвращает карту зуб -> список типов лечения.
   Stream<Map<String, List<String>>> watchTreatmentsByTooth(
     String patientId, {
     int limit = 500,
   }) {
-    final query = _firestore
-        .collection('treatments')
-        .where('patientId', isEqualTo: patientId)
-        .limit(limit);
-
-    return query.snapshots().map((snapshot) {
+    return _treatments.watchAll(maxRows: limit * 4).map((rows) {
+      final patientRows = _latestRows(_filterByPatient(rows, patientId), limit);
       final Map<String, Set<String>> aggregated = {};
 
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        final types = _extractTreatmentTypes(data);
+      for (final row in patientRows) {
+        final types = _extractTreatmentTypes(row);
         if (types.isEmpty) continue;
 
-        final rawTeeth = data['toothNumber'];
-        if (rawTeeth is Iterable) {
-          for (final tooth in rawTeeth) {
-            final key = tooth?.toString().trim();
-            if (key == null || key.isEmpty) continue;
-            aggregated.putIfAbsent(key, () => <String>{}).addAll(types);
-          }
-        } else if (rawTeeth != null) {
-          final key = rawTeeth.toString().trim();
-          if (key.isNotEmpty) {
-            aggregated.putIfAbsent(key, () => <String>{}).addAll(types);
-          }
+        final teeth = _extractToothNumbers(row);
+        for (final tooth in teeth) {
+          aggregated.putIfAbsent(tooth, () => <String>{}).addAll(types);
         }
       }
 
@@ -268,23 +93,89 @@ class DentalChartRepository {
     });
   }
 
-  /// Загружает уникальные типы лечения из коллекции treatments (опционально для пациента).
   Future<Set<String>> loadTreatmentTypes({
     String? patientId,
     int limit = 800,
   }) async {
-    Query<Map<String, dynamic>> query = _firestore.collection('treatments');
-    if (patientId != null) {
-      query = query.where('patientId', isEqualTo: patientId);
-    }
-    query = query.limit(limit);
+    final rows = await _treatments.fetchAll(limit: limit * 2);
+    final scoped =
+        patientId == null ? rows : _filterByPatient(rows, patientId, limit);
 
-    final snapshot = await query.get();
     final types = <String>{};
-    for (final doc in snapshot.docs) {
-      types.addAll(_extractTreatmentTypes(doc.data()));
+    for (final row in scoped) {
+      types.addAll(_extractTreatmentTypes(row));
     }
     return types;
+  }
+
+  List<Map<String, dynamic>> _filterByPatient(
+    List<Map<String, dynamic>> rows,
+    String patientId, [
+    int? limit,
+  ]) {
+    final filtered =
+        rows.where((row) => _matchesPatient(row, patientId)).toList();
+    if (limit == null) return filtered;
+    return _latestRows(filtered, limit);
+  }
+
+  List<Map<String, dynamic>> _latestRows(
+    List<Map<String, dynamic>> rows,
+    int limit,
+  ) {
+    rows.sort((a, b) => _asDate(b['date']).compareTo(_asDate(a['date'])));
+    if (rows.length > limit) {
+      return rows.sublist(0, limit);
+    }
+    return rows;
+  }
+
+  bool _matchesPatient(Map<String, dynamic> data, String patientId) {
+    final raw = data['patient_id'];
+    final resolved = raw?.toString().trim();
+    return resolved != null && resolved == patientId;
+  }
+
+  Map<String, ToothCondition> _buildPlanFromTreatments(
+    List<Map<String, dynamic>> rows,
+  ) {
+    final plan = <String, ToothCondition>{};
+    final ordered =
+        rows.toList()
+          ..sort((a, b) => _asDate(a['date']).compareTo(_asDate(b['date'])));
+
+    for (final row in ordered) {
+      final status = toothConditionFromString(row['status']?.toString());
+      final teeth = _extractToothNumbers(row);
+      for (final tooth in teeth) {
+        if (status == ToothCondition.healthy) {
+          plan.remove(tooth);
+        } else {
+          plan[tooth] = status;
+        }
+      }
+    }
+    return plan;
+  }
+
+  List<String> _extractToothNumbers(Map<String, dynamic> data) {
+    final raw = data['toothNumber'] ?? data['tooth_number'];
+    if (raw is Iterable) {
+      return raw
+          .map((e) => e?.toString().trim())
+          .whereType<String>()
+          .where((e) => e.isNotEmpty)
+          .toList();
+    }
+    if (raw is Map) {
+      return raw.keys
+          .map((key) => key.toString().trim())
+          .where((key) => key.isNotEmpty)
+          .toList();
+    }
+    if (raw == null) return const [];
+    final value = raw.toString().trim();
+    return value.isEmpty ? const [] : [value];
   }
 
   List<String> _extractTreatmentTypes(Map<String, dynamic> data) {
@@ -293,12 +184,19 @@ class DentalChartRepository {
     if (raw is Iterable) {
       return raw
           .map((e) => e?.toString().trim())
-          .where((e) => e != null && e!.isNotEmpty)
-          .map((e) => e!)
+          .whereType<String>()
+          .where((e) => e.isNotEmpty)
           .toList();
     }
     final value = raw.toString().trim();
     if (value.isEmpty) return const [];
     return [value];
+  }
+
+  DateTime _asDate(dynamic raw) {
+    if (raw is DateTime) return raw;
+    if (raw is String) return DateTime.tryParse(raw) ?? DateTime(1970);
+    if (raw is num) return DateTime.fromMillisecondsSinceEpoch(raw.toInt());
+    return DateTime(1970);
   }
 }

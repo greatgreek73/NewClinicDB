@@ -1,5 +1,5 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import '../services/supabase_client.dart';
 import '../theme/app_colors.dart';
 import '../widgets/page_header.dart';
 import '../widgets/primary_page_scaffold.dart';
@@ -10,11 +10,7 @@ class SearchPage extends StatelessWidget {
   const SearchPage({Key? key}) : super(key: key);
   @override
   Widget build(BuildContext context) {
-    return PrimaryPageScaffold(
-      maxWidth: 1100,
-      padding: const EdgeInsets.all(36),
-      child: const _SearchContent(),
-    );
+    return const PrimaryPageScaffold(child: _SearchContent());
   }
 }
 
@@ -97,23 +93,24 @@ class _SearchContentState extends State<_SearchContent> {
     String searchTerm,
     List<String> additionalTokens,
   ) async {
-    final snapshot =
-        await FirebaseFirestore.instance
-            .collection('patients')
-            .where('searchKey', isGreaterThanOrEqualTo: searchTerm)
-            .where('searchKey', isLessThan: '$searchTerm\uf8ff')
-            .limit(15)
-            .get();
+    final snapshot = await _queryPatientsByPrefix(
+      primaryField: 'search_key',
+      fallbackField: 'surname',
+      prefix: searchTerm,
+      limit: 25,
+    );
     final loweredTokens = additionalTokens
         .where((t) => t.isNotEmpty)
         .map((t) => t.toLowerCase());
     final List<_SearchResult> results = [];
-    for (final doc in snapshot.docs) {
-      final data = doc.data();
+    for (final row in snapshot) {
+      final data = row;
       final searchable = _collectSearchableText(data);
       final matchesFilters = loweredTokens.every(searchable.contains);
       if (!matchesFilters) continue;
-      results.add(_buildResultFromDoc(doc, data, meta: 'Patient record'));
+      final result = _buildResultFromRow(data, meta: 'Patient record');
+      if (result.id.isEmpty) continue;
+      results.add(result);
     }
     return results;
   }
@@ -125,28 +122,28 @@ class _SearchContentState extends State<_SearchContent> {
     final List<_SearchResult> results = [];
     for (final prefix in prefixes) {
       if (prefix.isEmpty) continue;
-      final snapshot =
-          await FirebaseFirestore.instance
-              .collection('patients')
-              .where('phone', isGreaterThanOrEqualTo: prefix)
-              .where('phone', isLessThan: '$prefix\uf8ff')
-              .limit(15)
-              .get();
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
+      final snapshot = await _queryPatientsByPrefix(
+        primaryField: 'phone',
+        fallbackField: 'phone',
+        prefix: prefix,
+        limit: 25,
+      );
+      for (final data in snapshot) {
         final docDigits = _normalizePhone(data['phone']);
         if (!docDigits.contains(normalizedDigits)) continue;
-        results.add(_buildResultFromDoc(doc, data, meta: 'Phone match'));
+        final result = _buildResultFromRow(data, meta: 'Phone match');
+        if (result.id.isEmpty) continue;
+        results.add(result);
       }
     }
     return results;
   }
 
-  _SearchResult _buildResultFromDoc(
-    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  _SearchResult _buildResultFromRow(
     Map<String, dynamic> data, {
     required String meta,
   }) {
+    final id = (data['id'] ?? '').toString().trim();
     final name = data['name']?.toString().trim() ?? '';
     final surname = data['surname']?.toString().trim() ?? '';
     final fullName = '$name $surname'.trim();
@@ -154,12 +151,50 @@ class _SearchContentState extends State<_SearchContent> {
     final city = data['city']?.toString().trim() ?? '';
     final subtitle = [phone, city].where((e) => e.isNotEmpty).join(' • ');
     return _SearchResult(
-      id: doc.id,
+      id: id,
       title: fullName.isNotEmpty ? fullName : 'Unknown Patient',
       subtitle: subtitle.isNotEmpty ? subtitle : 'No details',
       meta: meta,
       icon: Icons.person_outline,
     );
+  }
+
+  Future<List<Map<String, dynamic>>> _queryPatientsByPrefix({
+    required String primaryField,
+    required String fallbackField,
+    required String prefix,
+    required int limit,
+  }) async {
+    final client = maybeSupabaseClient;
+    if (client == null) return const [];
+
+    final pattern = '$prefix%';
+    try {
+      final response = await client
+          .from('patients')
+          .select()
+          .ilike(primaryField, pattern)
+          .limit(limit);
+      return (response as List)
+          .map((row) => Map<String, dynamic>.from(row as Map))
+          .toList();
+    } catch (_) {}
+
+    try {
+      final response = await client
+          .from('patients')
+          .select()
+          .ilike(fallbackField, pattern)
+          .limit(limit);
+      return (response as List)
+          .map((row) => Map<String, dynamic>.from(row as Map))
+          .toList();
+    } catch (_) {}
+
+    final response = await client.from('patients').select().limit(250);
+    return (response as List)
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .toList();
   }
 
   String _normalizePhone(dynamic value) {

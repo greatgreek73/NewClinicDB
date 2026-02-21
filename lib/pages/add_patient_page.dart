@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../services/id_generator.dart';
+import '../services/supabase_client.dart';
 import '../theme/app_colors.dart';
 import '../utils/decorations.dart';
 import '../widgets/page_header.dart';
@@ -12,114 +14,211 @@ class AddPatientPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return PrimaryPageScaffold(
-      maxWidth: 960,
-      child: const _AddPatientContent(),
-    );
+    return const PrimaryPageScaffold(child: _AddPatientContent());
   }
 }
 
-class _AddPatientContent extends StatelessWidget {
+class _AddPatientContent extends StatefulWidget {
   const _AddPatientContent({Key? key}) : super(key: key);
 
   @override
+  State<_AddPatientContent> createState() => _AddPatientContentState();
+}
+
+class _AddPatientContentState extends State<_AddPatientContent> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _surnameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _cityController = TextEditingController();
+  final _ageController = TextEditingController();
+  final _photoUrlController = TextEditingController();
+  String? _gender;
+  bool _isSaving = false;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _surnameController.dispose();
+    _phoneController.dispose();
+    _cityController.dispose();
+    _ageController.dispose();
+    _photoUrlController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _savePatient() async {
+    if (_isSaving) return;
+    if (!_formKey.currentState!.validate()) return;
+
+    final name = _nameController.text.trim();
+    final surname = _surnameController.text.trim();
+    final phone = _phoneController.text.trim();
+    final city = _cityController.text.trim();
+    final photoUrl = _photoUrlController.text.trim();
+    if (name.isEmpty || surname.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Name and surname are required.')),
+      );
+      return;
+    }
+    final searchKey = _buildSearchKey(surname);
+
+    final age = int.tryParse(_ageController.text.trim());
+
+    final payload = <String, dynamic>{
+      'id': generateTextId('patient'),
+      'name': name,
+      'surname': surname,
+      'search_key': searchKey,
+      'last_updated': DateTime.now().toUtc().toIso8601String(),
+    };
+
+    if (phone.isNotEmpty) payload['phone'] = phone;
+    if (city.isNotEmpty) payload['city'] = city;
+    if (_gender != null && _gender!.isNotEmpty) {
+      payload['gender'] = _gender;
+    }
+    if (age != null) payload['age'] = age;
+    if (photoUrl.isNotEmpty) payload['photo_url'] = photoUrl;
+
+    setState(() {
+      _isSaving = true;
+    });
+
+    try {
+      final client = maybeSupabaseClient;
+      if (client == null) {
+        throw StateError('Supabase is not configured');
+      }
+      await client.from('patients').insert(payload);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Patient created.')));
+      Navigator.of(context).pop();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not save patient: $error')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
+    }
+  }
+
+  String _buildSearchKey(String surname) {
+    return surname.toLowerCase();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isWide = constraints.maxWidth > 700;
-
-        final leftCard = _buildFormCard(
-          title: 'Patient details',
-          children: [
-            TextField(decoration: buildFormInputDecoration('Full name')),
-            const SizedBox(height: 16),
-            TextField(
-              decoration:
-                  buildFormInputDecoration('Date of birth', hint: 'DD/MM/YYYY'),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              decoration: buildFormInputDecoration('Preferred doctor'),
-            ),
-            const SizedBox(height: 16),
-            DropdownButtonFormField<String>(
-              decoration: buildFormInputDecoration('Primary concern'),
-              dropdownColor: AppColors.surfaceDark,
-              style: const TextStyle(color: AppColors.textPrimary),
-              items: const [
-                DropdownMenuItem(value: 'Implant', child: Text('Implants')),
-                DropdownMenuItem(value: 'Hygiene', child: Text('Hygiene')),
-                DropdownMenuItem(value: 'Whitening', child: Text('Whitening')),
-              ],
-              onChanged: (_) {},
-            ),
+    final leftCard = _buildFormCard(
+      title: 'Patient details',
+      children: [
+        TextFormField(
+          controller: _nameController,
+          decoration: buildFormInputDecoration('Name'),
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          controller: _surnameController,
+          decoration: buildFormInputDecoration('Surname'),
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          controller: _phoneController,
+          decoration: buildFormInputDecoration('Phone'),
+          keyboardType: TextInputType.phone,
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          controller: _cityController,
+          decoration: buildFormInputDecoration('City'),
+        ),
+        const SizedBox(height: 16),
+        DropdownButtonFormField<String>(
+          decoration: buildFormInputDecoration('Gender'),
+          dropdownColor: AppColors.surfaceDark,
+          value: _gender,
+          style: const TextStyle(color: AppColors.textPrimary),
+          items: const [
+            DropdownMenuItem(value: 'Мужской', child: Text('Мужской')),
+            DropdownMenuItem(value: 'Женский', child: Text('Женский')),
           ],
-        );
+          onChanged: (value) {
+            setState(() {
+              _gender = value;
+            });
+          },
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          controller: _ageController,
+          decoration: buildFormInputDecoration('Age'),
+          keyboardType: TextInputType.number,
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          controller: _photoUrlController,
+          decoration: buildFormInputDecoration('Photo URL'),
+        ),
+      ],
+    );
 
-        final rightCard = _buildFormCard(
-          title: 'Contact & notes',
-          children: [
-            TextField(decoration: buildFormInputDecoration('Phone number')),
-            const SizedBox(height: 16),
-            TextField(decoration: buildFormInputDecoration('Email')),
-            const SizedBox(height: 16),
-            TextField(
-              maxLines: 4,
-              decoration: buildFormInputDecoration(
-                'Notes for care team',
-                hint: 'Allergies, previous procedures, reminders...',
-              ),
-            ),
-          ],
-        );
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            PageHeader(
-              title: 'Add new patient',
-              subtitle: 'Create a profile and assign the first visit to keep the team aligned.',
-              actionLabel: 'Back to dashboard',
-              onAction: () => Navigator.of(context).pop(),
-            ),
-            const SizedBox(height: 28),
-            if (isWide)
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: leftCard),
-                  const SizedBox(width: 24),
-                  Expanded(child: rightCard),
-                ],
-              )
-            else ...[
-              leftCard,
-              const SizedBox(height: 24),
-              rightCard,
-            ],
-            const SizedBox(height: 32),
-            Align(
-              alignment: Alignment.centerRight,
-              child: ElevatedButton.icon(
-                onPressed: () {},
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accentStrong,
-                  foregroundColor: AppColors.bg,
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(999),
-                  ),
+    return Form(
+      key: _formKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          PageHeader(
+            title: 'Add new patient',
+            subtitle:
+                'Create a profile and assign the first visit to keep the team aligned.',
+            actionLabel: 'Back to dashboard',
+            onAction: () => Navigator.of(context).pop(),
+          ),
+          const SizedBox(height: 28),
+          leftCard,
+          const SizedBox(height: 32),
+          Align(
+            alignment: Alignment.centerRight,
+            child: ElevatedButton.icon(
+              onPressed: _isSaving ? null : _savePatient,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.accentStrong,
+                foregroundColor: AppColors.bg,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 32,
+                  vertical: 16,
                 ),
-                icon: const Icon(Icons.save_rounded),
-                label: const Text(
-                  'Save patient',
-                  style: TextStyle(fontWeight: FontWeight.w600),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(999),
                 ),
               ),
+              icon:
+                  _isSaving
+                      ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation(AppColors.bg),
+                        ),
+                      )
+                      : const Icon(Icons.save_rounded),
+              label: Text(
+                _isSaving ? 'Saving...' : 'Save patient',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
             ),
-          ],
-        );
-      },
+          ),
+        ],
+      ),
     );
   }
 

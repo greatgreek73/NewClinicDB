@@ -1,11 +1,13 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../models/patient_bucket.dart';
 import '../models/tooth_condition.dart';
 import '../models/treatment_palette.dart';
 import '../services/dental_chart_repository.dart';
+import '../services/id_generator.dart';
 import '../services/patient_bucket_service.dart';
+import '../services/supabase_client.dart';
+import '../services/treatment_data_service.dart';
 import '../theme/app_colors.dart';
 import '../utils/decorations.dart';
 import '../widgets/page_header.dart';
@@ -28,10 +30,7 @@ class PatientDetailsPage extends StatelessWidget {
     final args =
         ModalRoute.of(context)?.settings.arguments as PatientDetailsArgs?;
 
-    return PrimaryPageScaffold(
-      maxWidth: 1100,
-      child: _PatientDetailsContent(args: args),
-    );
+    return PrimaryPageScaffold(child: _PatientDetailsContent(args: args));
   }
 }
 
@@ -70,16 +69,10 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
     final patientId = widget.args?.patientId;
     final fallbackName = widget.args?.displayName ?? 'Patient';
 
-    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      future:
-          patientId != null
-              ? FirebaseFirestore.instance
-                  .collection('patients')
-                  .doc(patientId)
-                  .get()
-              : null,
+    return FutureBuilder<Map<String, dynamic>?>(
+      future: _loadPatient(patientId),
       builder: (context, snapshot) {
-        final data = snapshot.data?.data();
+        final data = snapshot.data;
         final resolvedName = _resolvePatientName(data, fallbackName);
         final isLoadingName =
             patientId != null &&
@@ -142,6 +135,21 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
     );
   }
 
+  Future<Map<String, dynamic>?> _loadPatient(String? patientId) async {
+    if (patientId == null || patientId.isEmpty) return null;
+    final client = maybeSupabaseClient;
+    if (client == null) return null;
+
+    final response =
+        await client
+            .from('patients')
+            .select()
+            .eq('id', patientId)
+            .maybeSingle();
+    if (response == null) return null;
+    return Map<String, dynamic>.from(response as Map);
+  }
+
   Widget _buildBucketSummary(String? patientId, int? initialBucket) {
     final resolvedId = patientId;
     return Container(
@@ -151,10 +159,7 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          const Icon(
-            Icons.info_outline,
-            color: AppColors.accent,
-          ),
+          const Icon(Icons.info_outline, color: AppColors.accent),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -170,16 +175,19 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
                 ),
                 const SizedBox(height: 4),
                 StreamBuilder<int?>(
-                  stream: resolvedId == null
-                      ? const Stream.empty()
-                      : _bucketService.watchPatientBucket(resolvedId),
+                  stream:
+                      resolvedId == null
+                          ? const Stream.empty()
+                          : _bucketService.watchPatientBucket(resolvedId),
                   initialData: initialBucket,
                   builder: (context, snapshot) {
                     final bucketId = snapshot.data ?? initialBucket;
-                    final bucket = bucketId != null ? bucketById(bucketId) : null;
+                    final bucket =
+                        bucketId != null ? bucketById(bucketId) : null;
                     final title = bucket?.title ?? 'No basket selected';
                     final desc =
-                        bucket?.description ?? 'Choose a basket at the top near the name.';
+                        bucket?.description ??
+                        'Choose a basket at the top near the name.';
                     return Text(
                       '$title — $desc',
                       style: TextStyle(
@@ -227,9 +235,7 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Could not update bucket: $error'),
-        ),
+        SnackBar(content: Text('Could not update bucket: $error')),
       );
     } finally {
       if (mounted) {
@@ -277,7 +283,8 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
                 snapshot.connectionState == ConnectionState.waiting;
             final errorMessage =
                 snapshot.hasError
-                    ? snapshot.error?.toString() ?? 'Unable to load dental chart'
+                    ? snapshot.error?.toString() ??
+                        'Unable to load dental chart'
                     : null;
 
             return _DentalChartSection(
@@ -400,7 +407,8 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
   String _formatMoney(double? amount) {
     if (amount == null) return '--';
     final isInt = amount % 1 == 0;
-    final formatted = isInt ? amount.toInt().toString() : amount.toStringAsFixed(2);
+    final formatted =
+        isInt ? amount.toInt().toString() : amount.toStringAsFixed(2);
     return '\$$formatted';
   }
 }
@@ -409,12 +417,10 @@ class PaymentStats {
   final double? totalCost;
   final double totalPaid;
 
-  const PaymentStats({
-    required this.totalCost,
-    required this.totalPaid,
-  });
+  const PaymentStats({required this.totalCost, required this.totalPaid});
 
-  factory PaymentStats.empty() => const PaymentStats(totalCost: null, totalPaid: 0);
+  factory PaymentStats.empty() =>
+      const PaymentStats(totalCost: null, totalPaid: 0);
 }
 
 class _InlineBucketSelector extends StatelessWidget {
@@ -527,7 +533,8 @@ class _BucketMiniIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = bucket.color;
-    final bg = isActive ? color.withOpacity(0.35) : Colors.white.withOpacity(0.08);
+    final bg =
+        isActive ? color.withOpacity(0.35) : Colors.white.withOpacity(0.08);
 
     return GestureDetector(
       onTap: enabled ? onTap : null,
@@ -541,24 +548,31 @@ class _BucketMiniIcon extends StatelessWidget {
             color: bg,
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
-              color: isActive ? color.withOpacity(0.9) : Colors.white.withOpacity(0.12),
+              color:
+                  isActive
+                      ? color.withOpacity(0.9)
+                      : Colors.white.withOpacity(0.12),
             ),
-            boxShadow: isActive
-                ? [
-                    BoxShadow(
-                      color: color.withOpacity(0.35),
-                      blurRadius: 18,
-                      spreadRadius: 4,
-                    ),
-                  ]
-                : [],
+            boxShadow:
+                isActive
+                    ? [
+                      BoxShadow(
+                        color: color.withOpacity(0.35),
+                        blurRadius: 18,
+                        spreadRadius: 4,
+                      ),
+                    ]
+                    : [],
           ),
           child: Icon(
             Icons.shopping_basket_rounded,
             size: 18,
-            color: enabled
-                ? (isActive ? AppColors.textPrimary : Colors.white.withOpacity(0.9))
-                : Colors.white.withOpacity(0.35),
+            color:
+                enabled
+                    ? (isActive
+                        ? AppColors.textPrimary
+                        : Colors.white.withOpacity(0.9))
+                    : Colors.white.withOpacity(0.35),
           ),
         ),
       ),
@@ -573,8 +587,12 @@ class _InfoCard extends StatelessWidget {
   final int? initialBucket;
   final bool isSavingBucket;
   final PatientBucketService bucketService;
-  final Future<void> Function(String patientId, int bucketId, int? currentBucket)?
-      onBucketSelect;
+  final Future<void> Function(
+    String patientId,
+    int bucketId,
+    int? currentBucket,
+  )?
+  onBucketSelect;
   final String totalCostText;
   final String paidTotalText;
 
@@ -671,10 +689,7 @@ class _InfoCard extends StatelessWidget {
           const SizedBox(height: 12),
           _buildContactRow(Icons.phone, '+1 202 555 0124'),
           const SizedBox(height: 8),
-          _buildContactRow(
-            Icons.email_outlined,
-            'anna.petrova@email.com',
-          ),
+          _buildContactRow(Icons.email_outlined, 'anna.petrova@email.com'),
           const SizedBox(height: 8),
           _buildContactRow(
             Icons.location_on_outlined,
@@ -768,17 +783,18 @@ class _ScheduleCard extends StatelessWidget {
                 ),
               ),
               TextButton.icon(
-                onPressed: patientId == null
-                    ? null
-                    : () {
-                        showDialog(
-                          context: context,
-                          barrierDismissible: true,
-                          builder: (ctx) => _AddTreatmentDialog(
-                            patientId: patientId!,
-                          ),
-                        );
-                      },
+                onPressed:
+                    patientId == null
+                        ? null
+                        : () {
+                          showDialog(
+                            context: context,
+                            barrierDismissible: true,
+                            builder:
+                                (ctx) =>
+                                    _AddTreatmentDialog(patientId: patientId!),
+                          );
+                        },
                 style: TextButton.styleFrom(
                   foregroundColor: AppColors.accent,
                   padding: const EdgeInsets.symmetric(
@@ -820,9 +836,8 @@ class _ScheduleCard extends StatelessWidget {
               showDialog(
                 context: context,
                 barrierDismissible: true,
-                builder: (ctx) => _AddTreatmentDialog(
-                  patientId: patientId!,
-                ),
+                builder:
+                    (ctx) => _TreatmentTimelineDialog(patientId: patientId!),
               );
             },
             style: ElevatedButton.styleFrom(
@@ -831,19 +846,17 @@ class _ScheduleCard extends StatelessWidget {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(999),
               ),
-              padding: const EdgeInsets.symmetric(
-                horizontal: 22,
-                vertical: 14,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
             ),
-            icon: const Icon(Icons.add),
-            label: const Text('Schedule new appointment'),
+            icon: const Icon(Icons.timeline),
+            label: const Text('Treatment'),
           ),
         ],
       ),
     );
   }
 }
+
 class _DentalChartSection extends StatelessWidget {
   final Map<String, ToothCondition> plan;
   final ToothCondition? selectedCondition;
@@ -984,10 +997,7 @@ class _DentalChartSection extends StatelessWidget {
               padding: const EdgeInsets.only(top: 8),
               child: Text(
                 error!,
-                style: const TextStyle(
-                  color: Colors.redAccent,
-                  fontSize: 12,
-                ),
+                style: const TextStyle(color: Colors.redAccent, fontSize: 12),
               ),
             ),
           if (isLoading)
@@ -1079,8 +1089,7 @@ class _ToothRow extends StatelessWidget {
                     selectedTreatmentType: selectedTreatmentType,
                     palette: palette,
                     isSelected: selectedTeeth.contains(label),
-                    onTap:
-                        onToothTap != null ? () => onToothTap!(label) : null,
+                    onTap: onToothTap != null ? () => onToothTap!(label) : null,
                   ),
                 ),
               )
@@ -1112,11 +1121,12 @@ class _DentalLegend extends StatelessWidget {
   Widget build(BuildContext context) {
     const chipPadding = EdgeInsets.symmetric(horizontal: 6, vertical: 3);
     final chipBorder = BorderSide(color: Colors.white.withOpacity(0.12));
-    final conditions = (availableConditions.isEmpty
-            ? ToothCondition.values
-            : availableConditions)
-        .where((c) => c != ToothCondition.treated)
-        .toList();
+    final conditions =
+        (availableConditions.isEmpty
+                ? ToothCondition.values
+                : availableConditions)
+            .where((c) => c != ToothCondition.treated)
+            .toList();
 
     const maxVisibleTypes = 4;
     final visibleTypes = treatmentTypes.take(maxVisibleTypes).toList();
@@ -1139,11 +1149,10 @@ class _DentalLegend extends StatelessWidget {
           visualDensity: VisualDensity.compact,
           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           side: chipBorder,
-          onSelected: onTreatmentTypeChange == null
-              ? null
-              : (_) => onTreatmentTypeChange!(
-                    isSelected ? null : type,
-                  ),
+          onSelected:
+              onTreatmentTypeChange == null
+                  ? null
+                  : (_) => onTreatmentTypeChange!(isSelected ? null : type),
         );
       }),
       if (extraCount > 0)
@@ -1151,8 +1160,10 @@ class _DentalLegend extends StatelessWidget {
           label: Text('+$extraCount'),
           selected: false,
           backgroundColor: Colors.white.withOpacity(0.08),
-          labelStyle:
-              const TextStyle(fontSize: 10, color: AppColors.textPrimary),
+          labelStyle: const TextStyle(
+            fontSize: 10,
+            color: AppColors.textPrimary,
+          ),
           labelPadding: chipPadding,
           visualDensity: VisualDensity.compact,
           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -1216,7 +1227,10 @@ class _DentalLegend extends StatelessWidget {
       builder: (ctx) {
         return Dialog(
           backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 24,
+          ),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(18),
           ),
@@ -1278,28 +1292,31 @@ class _DentalLegend extends StatelessWidget {
                         Wrap(
                           spacing: 8,
                           runSpacing: 8,
-                          children: treatmentTypes.map((type) {
-                            final isSelected = selectedTreatmentType == type;
-                            final color = palette.colorFor(type);
-                            return ChoiceChip(
-                              label: Text(type),
-                              selected: isSelected,
-                              selectedColor: color,
-                              backgroundColor: color.withOpacity(0.2),
-                              labelStyle: TextStyle(
-                                fontSize: 12,
-                                color: isSelected
-                                    ? AppColors.bg
-                                    : AppColors.textPrimary,
-                              ),
-                              onSelected: (_) {
-                                onTreatmentTypeChange!(
-                                  isSelected ? null : type,
+                          children:
+                              treatmentTypes.map((type) {
+                                final isSelected =
+                                    selectedTreatmentType == type;
+                                final color = palette.colorFor(type);
+                                return ChoiceChip(
+                                  label: Text(type),
+                                  selected: isSelected,
+                                  selectedColor: color,
+                                  backgroundColor: color.withOpacity(0.2),
+                                  labelStyle: TextStyle(
+                                    fontSize: 12,
+                                    color:
+                                        isSelected
+                                            ? AppColors.bg
+                                            : AppColors.textPrimary,
+                                  ),
+                                  onSelected: (_) {
+                                    onTreatmentTypeChange!(
+                                      isSelected ? null : type,
+                                    );
+                                    Navigator.of(ctx).pop();
+                                  },
                                 );
-                                Navigator.of(ctx).pop();
-                              },
-                            );
-                          }).toList(),
+                              }).toList(),
                         ),
                         const SizedBox(height: 12),
                       ],
@@ -1354,7 +1371,8 @@ class _ToothTile extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          if (!inverted) _ToothShape(condition: condition, selected: isSelected),
+          if (!inverted)
+            _ToothShape(condition: condition, selected: isSelected),
           if (treatments.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 6),
@@ -1414,9 +1432,8 @@ class _TreatmentDots extends StatelessWidget {
 
   Widget _buildDot(String type) {
     final color = palette.colorFor(type);
-    final isSelected = selectedTreatmentType == null
-        ? true
-        : selectedTreatmentType == type;
+    final isSelected =
+        selectedTreatmentType == null ? true : selectedTreatmentType == type;
 
     return Tooltip(
       message: type,
@@ -1462,16 +1479,18 @@ class _ToothShape extends StatelessWidget {
         ),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: selected
-              ? AppColors.accent.withOpacity(0.9)
-              : Colors.white.withOpacity(0.15),
+          color:
+              selected
+                  ? AppColors.accent.withOpacity(0.9)
+                  : Colors.white.withOpacity(0.15),
           width: selected ? 2 : 1,
         ),
         boxShadow: [
           BoxShadow(
-            color: selected
-                ? AppColors.accent.withOpacity(0.35)
-                : Colors.black.withOpacity(0.25),
+            color:
+                selected
+                    ? AppColors.accent.withOpacity(0.35)
+                    : Colors.black.withOpacity(0.25),
             blurRadius: selected ? 18 : 14,
             spreadRadius: selected ? 6 : 4,
           ),
@@ -1484,7 +1503,8 @@ class _ToothShape extends StatelessWidget {
 class _AddTreatmentDialog extends StatefulWidget {
   final String patientId;
 
-  const _AddTreatmentDialog({Key? key, required this.patientId}) : super(key: key);
+  const _AddTreatmentDialog({Key? key, required this.patientId})
+    : super(key: key);
 
   @override
   State<_AddTreatmentDialog> createState() => _AddTreatmentDialogState();
@@ -1492,6 +1512,7 @@ class _AddTreatmentDialog extends StatefulWidget {
 
 class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
   final DentalChartRepository _repo = DentalChartRepository();
+  final TreatmentDataService _treatmentStore = TreatmentDataService();
   final TreatmentPalette _palette = TreatmentPalette();
   static const List<String> _fallbackTypes = [
     'Кариес',
@@ -1562,21 +1583,23 @@ class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
     if (_selectedType == null || _selectedTeeth.isEmpty) return;
     setState(() => _saving = true);
     try {
-      await FirebaseFirestore.instance.collection('treatments').add({
-        'patientId': widget.patientId,
-        'treatmentType': _selectedType,
-        'toothNumber': _selectedTeeth.toList()..sort(),
+      await _treatmentStore.insert({
+        'id': generateTextId('treatment'),
+        'patient_id': widget.patientId,
+        'treatment_type': _selectedType,
+        'tooth_number': _selectedTeeth.toList()..sort(),
         'status': 'treated',
-        'date': FieldValue.serverTimestamp(),
+        'date': DateTime.now().toUtc().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
         'source': 'add-dialog',
       });
       if (!mounted) return;
       Navigator.of(context).pop(true);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not save: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not save: $e')));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -1627,8 +1650,12 @@ class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
                       ),
                       const Spacer(),
                       IconButton(
-                        onPressed: _saving ? null : () => Navigator.of(context).pop(),
-                        icon: const Icon(Icons.close, color: AppColors.textMuted),
+                        onPressed:
+                            _saving ? null : () => Navigator.of(context).pop(),
+                        icon: const Icon(
+                          Icons.close,
+                          color: AppColors.textMuted,
+                        ),
                       ),
                     ],
                   ),
@@ -1650,29 +1677,41 @@ class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
                       treatmentsByTooth: const {},
                       treatmentTypes: _types,
                       selectedTreatmentType: _selectedType,
-                      onTreatmentTypeChange: (t) => setState(() {
-                        _selectedType = t;
-                      }),
+                      onTreatmentTypeChange:
+                          (t) => setState(() {
+                            _selectedType = t;
+                          }),
                       palette: _palette,
                       selectedTeeth: _selectedTeeth,
                     ),
                   ),
                   const SizedBox(height: 12),
                   if (_selectedTeeth.isNotEmpty)
-                    Builder(builder: (context) {
-                      final list = _selectedTeeth.toList()..sort();
-                      return Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: list
-                            .map((t) => Chip(
-                                  label: Text('Tooth $t'),
-                                  deleteIcon: const Icon(Icons.close, size: 16),
-                                  onDeleted: _saving ? null : () => _toggleTooth(t),
-                                ))
-                            .toList(),
-                      );
-                    }),
+                    Builder(
+                      builder: (context) {
+                        final list = _selectedTeeth.toList()..sort();
+                        return Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children:
+                              list
+                                  .map(
+                                    (t) => Chip(
+                                      label: Text('Tooth $t'),
+                                      deleteIcon: const Icon(
+                                        Icons.close,
+                                        size: 16,
+                                      ),
+                                      onDeleted:
+                                          _saving
+                                              ? null
+                                              : () => _toggleTooth(t),
+                                    ),
+                                  )
+                                  .toList(),
+                        );
+                      },
+                    ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
@@ -1688,28 +1727,35 @@ class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
                         ),
                       ),
                       TextButton(
-                        onPressed: _saving ? null : () => Navigator.of(context).pop(),
+                        onPressed:
+                            _saving ? null : () => Navigator.of(context).pop(),
                         child: const Text('Cancel'),
                       ),
                       const SizedBox(width: 8),
                       ElevatedButton.icon(
-                        onPressed: _saving || _selectedType == null || _selectedTeeth.isEmpty
-                            ? null
-                            : _save,
+                        onPressed:
+                            _saving ||
+                                    _selectedType == null ||
+                                    _selectedTeeth.isEmpty
+                                ? null
+                                : _save,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.accent,
                           foregroundColor: AppColors.bg,
                         ),
-                        icon: _saving
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation(AppColors.bg),
-                                ),
-                              )
-                            : const Icon(Icons.check),
+                        icon:
+                            _saving
+                                ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation(
+                                      AppColors.bg,
+                                    ),
+                                  ),
+                                )
+                                : const Icon(Icons.check),
                         label: const Text('Save'),
                       ),
                     ],
@@ -1750,24 +1796,770 @@ class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
     return Wrap(
       spacing: 8,
       runSpacing: 8,
-      children: _types.map((type) {
-        final isSelected = _selectedType == type;
-        final color = _palette.colorFor(type);
-        return ChoiceChip(
-          label: Text(type),
-          selected: isSelected,
-          selectedColor: color,
-          backgroundColor: color.withOpacity(0.25),
-          labelStyle: TextStyle(
-            color: isSelected ? AppColors.bg : AppColors.textPrimary,
+      children:
+          _types.map((type) {
+            final isSelected = _selectedType == type;
+            final color = _palette.colorFor(type);
+            return ChoiceChip(
+              label: Text(type),
+              selected: isSelected,
+              selectedColor: color,
+              backgroundColor: color.withOpacity(0.25),
+              labelStyle: TextStyle(
+                color: isSelected ? AppColors.bg : AppColors.textPrimary,
+              ),
+              onSelected: (_) {
+                setState(() {
+                  _selectedType = isSelected ? null : type;
+                });
+              },
+            );
+          }).toList(),
+    );
+  }
+}
+
+class _TreatmentTimelineDialog extends StatelessWidget {
+  final String patientId;
+  final TreatmentDataService _treatmentStore = TreatmentDataService();
+
+  _TreatmentTimelineDialog({Key? key, required this.patientId})
+    : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _treatmentStore.watchAll().map(
+      (rows) => rows
+          .where((row) => _matchesPatient(row, patientId))
+          .toList(growable: false),
+    );
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 900, minHeight: 320),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                AppColors.accent.withOpacity(0.35),
+                AppColors.accentStrong.withOpacity(0.45),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(22),
           ),
-          onSelected: (_) {
-            setState(() {
-              _selectedType = isSelected ? null : type;
-            });
-          },
+          padding: const EdgeInsets.all(2),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.surface.withOpacity(0.98),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withOpacity(0.12)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      const Text(
+                        'Treatment timeline',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(
+                          Icons.close,
+                          color: AppColors.textMuted,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: StreamBuilder<List<Map<String, dynamic>>>(
+                      stream: query,
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return const LinearProgressIndicator(
+                            minHeight: 4,
+                            valueColor: AlwaysStoppedAnimation(
+                              AppColors.accent,
+                            ),
+                            backgroundColor: Colors.transparent,
+                          );
+                        }
+                        if (snapshot.hasError) {
+                          return Center(
+                            child: Text(
+                              'Failed to load treatments: ${snapshot.error}',
+                              style: const TextStyle(
+                                color: Colors.redAccent,
+                                fontSize: 12,
+                              ),
+                            ),
+                          );
+                        }
+
+                        final docs =
+                            (snapshot.data ?? <Map<String, dynamic>>[])
+                                .toList();
+                        docs.sort((a, b) {
+                          final ad = _asDate(b['date']);
+                          final bd = _asDate(a['date']);
+                          return ad.compareTo(bd); // latest first
+                        });
+                        if (docs.length > 200) {
+                          docs.removeRange(200, docs.length);
+                        }
+
+                        if (docs.isEmpty) {
+                          return Center(
+                            child: Text(
+                              'No treatments yet for this patient.',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: AppColors.textMuted.withOpacity(0.9),
+                              ),
+                            ),
+                          );
+                        }
+
+                        return ListView.separated(
+                          itemCount: docs.length,
+                          separatorBuilder:
+                              (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final data = docs[index];
+                            final treatmentId = data['id'];
+                            final type =
+                                (data['treatmentType'] ??
+                                        data['type'] ??
+                                        data['treatment_type'] ??
+                                        '')
+                                    .toString();
+                            final status = (data['status'] ?? '').toString();
+                            final date = _asDate(data['date']);
+                            final teeth = _asStringList(
+                              data['toothNumber'] ?? data['tooth_number'],
+                            );
+                            return _TimelineTile(
+                              date: _formatDate(date),
+                              title: type.isNotEmpty ? type : 'Treatment',
+                              meta: _composeMeta(status: status, teeth: teeth),
+                              highlight: index == 0,
+                              onDelete:
+                                  treatmentId == null
+                                      ? null
+                                      : () => _confirmAndDelete(
+                                        context,
+                                        treatmentId,
+                                      ),
+                              onEdit:
+                                  treatmentId == null
+                                      ? null
+                                      : () {
+                                        showDialog(
+                                          context: context,
+                                          barrierDismissible: true,
+                                          builder:
+                                              (_) => _EditTreatmentDialog(
+                                                treatmentId: treatmentId,
+                                                initialData: data,
+                                              ),
+                                        );
+                                      },
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  bool _matchesPatient(Map<String, dynamic> data, String patientId) {
+    final raw = data['patient_id'];
+    final resolved = raw?.toString().trim();
+    return resolved != null && resolved == patientId;
+  }
+
+  static DateTime _asDate(dynamic raw) {
+    if (raw is DateTime) return raw;
+    if (raw is String) {
+      final parsed = DateTime.tryParse(raw);
+      if (parsed != null) return parsed;
+    }
+    if (raw is num) {
+      return DateTime.fromMillisecondsSinceEpoch(raw.toInt());
+    }
+    return DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  static List<String> _asStringList(dynamic raw) {
+    if (raw is Iterable) {
+      return raw
+          .map((e) => e?.toString() ?? '')
+          .where((s) => s.isNotEmpty)
+          .toList();
+    }
+    if (raw == null) return const [];
+    final s = raw.toString();
+    return s.isEmpty ? const [] : [s];
+  }
+
+  static String _formatDate(DateTime dt) {
+    String two(int v) => v < 10 ? '0$v' : '$v';
+    return '${dt.year}-${two(dt.month)}-${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
+  }
+
+  static String _composeMeta({
+    required String status,
+    required List<String> teeth,
+  }) {
+    final parts = <String>[];
+    if (teeth.isNotEmpty) parts.add('Teeth: ${teeth.join(', ')}');
+    if (status.isNotEmpty) parts.add('Status: $status');
+    return parts.isEmpty ? '' : parts.join(' • ');
+  }
+
+  Future<void> _confirmAndDelete(
+    BuildContext context,
+    dynamic treatmentId,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: AppColors.surfaceDark,
+          title: const Text(
+            'Delete treatment?',
+            style: TextStyle(color: AppColors.textPrimary),
+          ),
+          content: Text(
+            'This action cannot be undone.',
+            style: TextStyle(
+              color: AppColors.textMuted.withOpacity(0.95),
+              fontSize: 13,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+              child: const Text('Delete'),
+            ),
+          ],
         );
-      }).toList(),
+      },
+    );
+
+    if (confirmed != true) return;
+    try {
+      await _treatmentStore.deleteById(treatmentId);
+      // Feedback
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Deleted treatment')));
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
+    }
+  }
+}
+
+class _EditTreatmentDialog extends StatefulWidget {
+  final dynamic treatmentId;
+  final Map<String, dynamic> initialData;
+
+  const _EditTreatmentDialog({
+    Key? key,
+    required this.treatmentId,
+    required this.initialData,
+  }) : super(key: key);
+
+  @override
+  State<_EditTreatmentDialog> createState() => _EditTreatmentDialogState();
+}
+
+class _EditTreatmentDialogState extends State<_EditTreatmentDialog> {
+  final TreatmentPalette _palette = TreatmentPalette();
+  final DentalChartRepository _repo = DentalChartRepository();
+  final TreatmentDataService _treatmentStore = TreatmentDataService();
+
+  static const List<String> _fallbackTypes = [
+    'Кариес',
+    'Имплантация',
+    'Удаление',
+    'Сканирование',
+    'Эндо',
+    'Формирователь',
+    'РММА',
+    'Коронка',
+    'Абатмент',
+    'Сдача РММА',
+    'Сдача коронка',
+    'Сдача абатмент',
+    'Удаление импланта',
+  ];
+  static const List<String> _statuses = ['planned', 'inProgress', 'treated'];
+
+  bool _loading = false;
+  bool _typesLoading = true;
+  String? _typesError;
+  List<String> _types = [];
+
+  final Set<String> _selectedTeeth = {};
+  String? _selectedType;
+  String _selectedStatus = 'treated';
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeFromData();
+    _loadTypes();
+  }
+
+  void _initializeFromData() {
+    final data = widget.initialData;
+    _selectedType =
+        (data['treatmentType'] ?? data['type'] ?? data['treatment_type'])
+            ?.toString();
+    final teeth = _parseTeeth(data['toothNumber'] ?? data['tooth_number']);
+    _selectedTeeth.addAll(teeth);
+    final status = data['status']?.toString();
+    if (status != null && status.isNotEmpty) {
+      _selectedStatus = status;
+    }
+  }
+
+  Future<void> _loadTypes() async {
+    setState(() {
+      _typesLoading = true;
+      _typesError = null;
+    });
+    try {
+      // Try global and patient-scoped types
+      final set = await _repo.loadTreatmentTypes();
+      final items = {...set, ..._fallbackTypes}.toList()..sort();
+      setState(() => _types = items);
+    } catch (e) {
+      setState(() => _typesError = 'Failed to load types: $e');
+    } finally {
+      if (mounted) setState(() => _typesLoading = false);
+    }
+  }
+
+  static List<String> _parseTeeth(dynamic raw) {
+    if (raw is Iterable) {
+      return raw
+          .map((e) => e?.toString() ?? '')
+          .where((s) => s.isNotEmpty)
+          .toList();
+    }
+    if (raw == null) return const [];
+    final s = raw.toString();
+    return s.isEmpty ? const [] : [s];
+  }
+
+  void _toggleTooth(String tooth) {
+    setState(() {
+      if (_selectedTeeth.contains(tooth)) {
+        _selectedTeeth.remove(tooth);
+      } else {
+        _selectedTeeth.add(tooth);
+      }
+    });
+  }
+
+  Future<void> _save() async {
+    if (_selectedType == null || _selectedTeeth.isEmpty) return;
+    setState(() => _loading = true);
+    try {
+      await _treatmentStore.updateById(widget.treatmentId, {
+        'treatment_type': _selectedType,
+        'tooth_number': _selectedTeeth.toList()..sort(),
+        'status': _selectedStatus,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      });
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to save: $e')));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1100),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                AppColors.accent.withOpacity(0.35),
+                AppColors.accentStrong.withOpacity(0.45),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(22),
+          ),
+          padding: const EdgeInsets.all(2),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.surface.withOpacity(0.98),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withOpacity(0.12)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Text(
+                        'Edit treatment',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        onPressed:
+                            _loading ? null : () => Navigator.of(context).pop(),
+                        icon: const Icon(
+                          Icons.close,
+                          color: AppColors.textMuted,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _buildTypeSelector(),
+                  const SizedBox(height: 12),
+                  _buildStatusSelector(),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    height: 520,
+                    child: _DentalChartSection(
+                      plan: const <String, ToothCondition>{},
+                      selectedCondition: null,
+                      availableConditions: const [ToothCondition.treated],
+                      onConditionChange: (_) {},
+                      onToothTap: _toggleTooth,
+                      isLoading: false,
+                      error: null,
+                      treatmentsByTooth: const {},
+                      treatmentTypes: _types,
+                      selectedTreatmentType: _selectedType,
+                      onTreatmentTypeChange:
+                          (t) => setState(() => _selectedType = t),
+                      palette: _palette,
+                      selectedTeeth: _selectedTeeth,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (_selectedTeeth.isNotEmpty)
+                    Builder(
+                      builder: (context) {
+                        final list = _selectedTeeth.toList()..sort();
+                        return Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children:
+                              list
+                                  .map(
+                                    (t) => Chip(
+                                      label: Text('Tooth $t'),
+                                      deleteIcon: const Icon(
+                                        Icons.close,
+                                        size: 16,
+                                      ),
+                                      onDeleted:
+                                          _loading
+                                              ? null
+                                              : () => _toggleTooth(t),
+                                    ),
+                                  )
+                                  .toList(),
+                        );
+                      },
+                    ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _selectedType == null
+                              ? 'Select a treatment type'
+                              : 'Type: ${_selectedType!}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textMuted.withOpacity(0.9),
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed:
+                            _loading ? null : () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        onPressed:
+                            _loading ||
+                                    _selectedType == null ||
+                                    _selectedTeeth.isEmpty
+                                ? null
+                                : _save,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.accent,
+                          foregroundColor: AppColors.bg,
+                        ),
+                        icon:
+                            _loading
+                                ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation(
+                                      AppColors.bg,
+                                    ),
+                                  ),
+                                )
+                                : const Icon(Icons.check),
+                        label: const Text('Save'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTypeSelector() {
+    if (_typesLoading) {
+      return LinearProgressIndicator(
+        minHeight: 4,
+        valueColor: const AlwaysStoppedAnimation(AppColors.accent),
+        backgroundColor: Colors.white.withOpacity(0.08),
+      );
+    }
+    if (_typesError != null) {
+      return Text(
+        _typesError!,
+        style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+      );
+    }
+    if (_types.isEmpty) {
+      return Text(
+        'No treatment types found. Add new via database.',
+        style: TextStyle(
+          fontSize: 12,
+          color: AppColors.textMuted.withOpacity(0.9),
+        ),
+      );
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children:
+          _types.map((type) {
+            final isSelected = _selectedType == type;
+            final color = _palette.colorFor(type);
+            return ChoiceChip(
+              label: Text(type),
+              selected: isSelected,
+              selectedColor: color,
+              backgroundColor: color.withOpacity(0.25),
+              labelStyle: TextStyle(
+                color: isSelected ? AppColors.bg : AppColors.textPrimary,
+              ),
+              onSelected: (_) {
+                setState(() {
+                  _selectedType = isSelected ? null : type;
+                });
+              },
+            );
+          }).toList(),
+    );
+  }
+
+  Widget _buildStatusSelector() {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children:
+          _statuses.map((s) {
+            final isSel = _selectedStatus == s;
+            return ChoiceChip(
+              label: Text(s),
+              selected: isSel,
+              selectedColor: AppColors.accent,
+              backgroundColor: Colors.white.withOpacity(0.08),
+              labelStyle: TextStyle(
+                color: isSel ? AppColors.bg : AppColors.textPrimary,
+              ),
+              onSelected: (_) => setState(() => _selectedStatus = s),
+            );
+          }).toList(),
+    );
+  }
+}
+
+class _TimelineTile extends StatelessWidget {
+  final String date;
+  final String title;
+  final String meta;
+  final bool highlight;
+  final VoidCallback? onDelete;
+  final VoidCallback? onEdit;
+
+  const _TimelineTile({
+    Key? key,
+    required this.date,
+    required this.title,
+    required this.meta,
+    this.highlight = false,
+    this.onDelete,
+    this.onEdit,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final lineColor = Colors.white.withOpacity(0.1);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Column(
+          children: [
+            Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(
+                color: highlight ? AppColors.accentStrong : AppColors.accent,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  if (highlight)
+                    BoxShadow(
+                      color: AppColors.accentStrong.withOpacity(0.5),
+                      blurRadius: 12,
+                      spreadRadius: 3,
+                    ),
+                ],
+              ),
+            ),
+            Container(
+              width: 2,
+              height: 54,
+              margin: const EdgeInsets.only(top: 4),
+              color: lineColor,
+            ),
+          ],
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: buildSurfaceCardDecoration(glow: highlight),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      date,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textMuted.withOpacity(0.9),
+                      ),
+                    ),
+                    if (onEdit != null) ...[
+                      const SizedBox(width: 6),
+                      IconButton(
+                        tooltip: 'Edit',
+                        onPressed: onEdit,
+                        icon: const Icon(Icons.edit_outlined, size: 18),
+                        color: AppColors.accent,
+                      ),
+                    ],
+                    if (onDelete != null) ...[
+                      const SizedBox(width: 6),
+                      IconButton(
+                        tooltip: 'Delete',
+                        onPressed: onDelete,
+                        icon: const Icon(Icons.delete_outline, size: 18),
+                        color: Colors.redAccent.withOpacity(0.9),
+                      ),
+                    ],
+                  ],
+                ),
+                if (meta.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    meta,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textMuted.withOpacity(0.95),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

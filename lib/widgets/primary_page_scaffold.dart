@@ -7,26 +7,16 @@ import '../utils/decorations.dart';
 
 class PrimaryPageScaffold extends StatelessWidget {
   final Widget child;
-  final double maxWidth;
   final EdgeInsets padding;
 
   const PrimaryPageScaffold({
     super.key,
     required this.child,
-    this.maxWidth = 1100,
     this.padding = const EdgeInsets.all(36),
   });
 
   @override
   Widget build(BuildContext context) {
-    final viewPadding = MediaQuery.of(context).viewPadding;
-    final contentPadding = EdgeInsets.only(
-      left: 24 + viewPadding.left,
-      right: 24 + viewPadding.right,
-      top: 24 + viewPadding.top,
-      bottom: 24 + viewPadding.bottom,
-    );
-
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: kClinicOverlayStyle,
       child: Scaffold(
@@ -46,30 +36,21 @@ class PrimaryPageScaffold extends StatelessWidget {
               stops: const [0.0, 0.45, 1.0],
             ),
           ),
-          child: Padding(
-            padding: contentPadding,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return SingleChildScrollView(
-                  child: Align(
-                    alignment: Alignment.center,
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: maxWidth,
-                        minHeight: constraints.maxHeight,
-                      ),
-                      child: Container(
-                        decoration: buildPrimaryPanelDecoration(),
-                        child: Padding(
-                          padding: padding,
-                          child: child,
-                        ),
-                      ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: Container(
+                    width: double.infinity,
+                    decoration: buildPrimaryPanelDecoration(),
+                    child: SafeArea(
+                      child: Padding(padding: padding, child: child),
                     ),
                   ),
-                );
-              },
-            ),
+                ),
+              );
+            },
           ),
         ),
       ),
