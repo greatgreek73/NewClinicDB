@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:vector_math/vector_math_64.dart' as vm;
 import 'dart:math' as math;
 
-import '../models/patient_bucket.dart';
+import '../models/waitlist_stage.dart';
 import '../services/supabase_client.dart';
+import '../services/waitlist_service.dart';
 import '../theme/app_colors.dart';
+import '../utils/patient_name_formatter.dart';
 import '../utils/decorations.dart';
 import '../widgets/page_header.dart';
 import '../widgets/patient_3d_graph_canvas.dart';
@@ -57,7 +59,7 @@ class _Patient3DGraphPageState extends State<Patient3DGraphPage> {
 
     try {
       final scheduledIds = await _loadScheduledPatientIdsForToday();
-      final families = await _loadBucketFamilies(scheduledIds);
+      final families = await _loadStageFamilies(scheduledIds);
 
       setState(() {
         _families = families;
@@ -98,13 +100,13 @@ class _Patient3DGraphPageState extends State<Patient3DGraphPage> {
     return ids;
   }
 
-  Future<List<Patient3DFamily>> _loadBucketFamilies(
+  Future<List<Patient3DFamily>> _loadStageFamilies(
     Set<String> scheduledIds,
   ) async {
     final client = maybeSupabaseClient;
     if (client == null) return const <Patient3DFamily>[];
 
-    const maxPatientsPerBucket = 20;
+    const maxPatientsPerStage = 20;
     final families = <Patient3DFamily>[];
     final familyPositions = <vm.Vector3>[
       vm.Vector3(-3, 0, 0),
@@ -119,29 +121,20 @@ class _Patient3DGraphPageState extends State<Patient3DGraphPage> {
             .map((row) => Map<String, dynamic>.from(row as Map))
             .toList();
 
-    for (var i = 0; i < patientBuckets.length; i++) {
-      final bucket = patientBuckets[i];
+    for (var i = 0; i < waitlistStages.length; i++) {
+      final stage = waitlistStages[i];
       final docs =
           patientRows.where((row) {
-            final rawBucket = row['priority_bucket'];
-            if (rawBucket is num) {
-              return rawBucket.toInt() == bucket.id;
-            }
-            return rawBucket?.toString() == bucket.id.toString();
+            return waitlistStageIdFromData(row) == stage.id;
           }).toList();
       final total = docs.length;
 
       final patients = <Patient3DNode>[];
       for (var index = 0; index < docs.length; index++) {
-        if (index >= maxPatientsPerBucket) break;
+        if (index >= maxPatientsPerStage) break;
         final data = docs[index];
         final rowId = (data['id'] ?? '').toString().trim();
         if (rowId.isEmpty) continue;
-        final name = (data['name'] ?? '').toString().trim();
-        final surname = (data['surname'] ?? '').toString().trim();
-        final resolvedName =
-            [name, surname].where((v) => v.isNotEmpty).join(' ').trim();
-
         final phone = (data['phone'] ?? '').toString().trim();
         final city = (data['city'] ?? '').toString().trim();
         final subtitle = [phone, city].where((v) => v.isNotEmpty).join(' | ');
@@ -150,7 +143,7 @@ class _Patient3DGraphPageState extends State<Patient3DGraphPage> {
         final status =
             scheduledIds.contains(rowId)
                 ? Patient3DStatus.scheduled
-                : bucket.id == 1
+                : stage.id == 1
                 ? Patient3DStatus.urgent
                 : isDebt
                 ? Patient3DStatus.debt
@@ -159,7 +152,11 @@ class _Patient3DGraphPageState extends State<Patient3DGraphPage> {
         patients.add(
           Patient3DNode(
             id: rowId,
-            name: resolvedName.isNotEmpty ? resolvedName : 'Patient $rowId',
+            name: formatPatientDisplayName(
+              name: data['name'],
+              surname: data['surname'],
+              fallback: 'Patient $rowId',
+            ),
             subtitle: subtitle.isNotEmpty ? subtitle : null,
             status: status,
             offset: _computePatientOffset(index, total),
@@ -169,9 +166,9 @@ class _Patient3DGraphPageState extends State<Patient3DGraphPage> {
 
       families.add(
         Patient3DFamily(
-          id: 'bucket-${bucket.id}',
-          name: bucket.title,
-          color: bucket.color,
+          id: 'stage-${stage.id}',
+          name: stage.title,
+          color: stage.color,
           position: familyPositions[i % familyPositions.length],
           patients: patients,
         ),
@@ -218,7 +215,7 @@ class _Patient3DGraphPageState extends State<Patient3DGraphPage> {
           PageHeader(
             title: '3D patients map',
             subtitle:
-                'Clusters by priority bucket with scheduled/urgent/debt status.',
+                'Clusters by waiting list stage with scheduled/urgent/debt status.',
             actionLabel: 'Back to dashboard',
             onAction: () => Navigator.of(context).pop(),
           ),

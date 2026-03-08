@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import '../services/recent_patient_search_service.dart';
 import '../services/supabase_client.dart';
 import '../theme/app_colors.dart';
+import '../utils/patient_name_formatter.dart';
 import '../widgets/page_header.dart';
 import '../widgets/primary_page_scaffold.dart';
 import 'patient_details_page.dart';
@@ -22,9 +24,107 @@ class _SearchContent extends StatefulWidget {
 
 class _SearchContentState extends State<_SearchContent> {
   final TextEditingController _searchController = TextEditingController();
+  final RecentPatientSearchService _recentSearchService =
+      RecentPatientSearchService();
   List<_SearchResult> _results = [];
+  List<_SearchResult> _recentResults = [];
   bool _isLoading = false;
+  bool _isLoadingRecent = true;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRecentPatients();
+  }
+
+  Future<void> _loadRecentPatients() async {
+    try {
+      final recentEntries = await _recentSearchService.loadRecentPatients();
+      final hydratedEntries = await _hydrateRecentPatients(recentEntries);
+      await _recentSearchService.replaceRecentPatients(hydratedEntries);
+      if (!mounted) return;
+      setState(() {
+        _recentResults = _mapRecentEntriesToResults(hydratedEntries);
+        _isLoadingRecent = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _recentResults = [];
+        _isLoadingRecent = false;
+      });
+    }
+  }
+
+  Future<List<RecentPatientSearchEntry>> _hydrateRecentPatients(
+    List<RecentPatientSearchEntry> entries,
+  ) async {
+    final client = maybeSupabaseClient;
+    if (client == null || entries.isEmpty) return entries;
+
+    final hydrated = await Future.wait(
+      entries.map((entry) async {
+        try {
+          final response =
+              await client
+                  .from('patients')
+                  .select('id, name, surname, phone, city')
+                  .eq('id', entry.id)
+                  .maybeSingle();
+          if (response is! Map) return entry;
+
+          final data = Map<String, dynamic>.from(response as Map);
+          final phone = data['phone']?.toString().trim() ?? '';
+          final city = data['city']?.toString().trim() ?? '';
+          final subtitle = [
+            phone,
+            city,
+          ].where((value) => value.isNotEmpty).join(' • ');
+
+          return RecentPatientSearchEntry(
+            id: entry.id,
+            title: formatPatientDisplayName(
+              name: data['name'],
+              surname: data['surname'],
+              fallback: entry.title,
+            ),
+            subtitle: subtitle.isNotEmpty ? subtitle : entry.subtitle,
+          );
+        } catch (_) {
+          return entry;
+        }
+      }),
+    );
+
+    return hydrated;
+  }
+
+  List<_SearchResult> _mapRecentEntriesToResults(
+    List<RecentPatientSearchEntry> entries,
+  ) {
+    return entries
+        .map(
+          (entry) => _SearchResult(
+            id: entry.id,
+            title: entry.title,
+            subtitle: entry.subtitle.isNotEmpty ? entry.subtitle : 'No details',
+            meta: 'Recent',
+            icon: Icons.history_rounded,
+          ),
+        )
+        .toList();
+  }
+
+  Future<void> _clearRecentPatients() async {
+    await _recentSearchService.clearRecentPatients();
+    if (!mounted) return;
+    setState(() {
+      _recentResults = [];
+      _isLoadingRecent = false;
+    });
+  }
+
   Future<void> _performSearch(String query) async {
     final cleanQuery = query.trim();
     if (cleanQuery.isEmpty) {
@@ -79,7 +179,16 @@ class _SearchContentState extends State<_SearchContent> {
     }
   }
 
-  void _openPatient(_SearchResult result) {
+  Future<void> _openPatient(_SearchResult result) async {
+    await _recentSearchService.rememberPatient(
+      RecentPatientSearchEntry(
+        id: result.id,
+        title: result.title,
+        subtitle: result.subtitle,
+      ),
+    );
+    await _loadRecentPatients();
+    if (!mounted) return;
     Navigator.of(context).pushNamed(
       PatientDetailsPage.routeName,
       arguments: PatientDetailsArgs(
@@ -144,15 +253,16 @@ class _SearchContentState extends State<_SearchContent> {
     required String meta,
   }) {
     final id = (data['id'] ?? '').toString().trim();
-    final name = data['name']?.toString().trim() ?? '';
-    final surname = data['surname']?.toString().trim() ?? '';
-    final fullName = '$name $surname'.trim();
     final phone = data['phone']?.toString().trim() ?? '';
     final city = data['city']?.toString().trim() ?? '';
     final subtitle = [phone, city].where((e) => e.isNotEmpty).join(' • ');
     return _SearchResult(
       id: id,
-      title: fullName.isNotEmpty ? fullName : 'Unknown Patient',
+      title: formatPatientDisplayName(
+        name: data['name'],
+        surname: data['surname'],
+        fallback: 'Unknown Patient',
+      ),
       subtitle: subtitle.isNotEmpty ? subtitle : 'No details',
       meta: meta,
       icon: Icons.person_outline,
@@ -283,26 +393,70 @@ class _SearchContentState extends State<_SearchContent> {
         const SizedBox(height: 28),
         // РљРѕРЅС‚РµРЅС‚ РїРѕРґ СЃС‚СЂРѕРєРѕР№ РїРѕРёСЃРєР°
         if (_searchController.text.isEmpty) ...[
-          Text(
-            'Suggested filters',
-            style: TextStyle(
-              fontSize: 13,
-              color: AppColors.textMuted.withOpacity(0.9),
+          if (_isLoadingRecent)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: LinearProgressIndicator(
+                minHeight: 4,
+                valueColor: AlwaysStoppedAnimation(AppColors.accent),
+                backgroundColor: Colors.white.withOpacity(0.08),
+              ),
+            )
+          else if (_recentResults.isNotEmpty) ...[
+            Row(
+              children: [
+                Text(
+                  'Recent patients',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textMuted.withOpacity(0.9),
+                  ),
+                ),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: _clearRecentPatients,
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.accent,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  icon: const Icon(Icons.delete_outline_rounded, size: 16),
+                  label: const Text('Clear'),
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children:
-                [
-                  'Patients',
-                  'Treatments',
-                  'Invoices',
-                  'Notes',
-                  'Upcoming',
-                ].map((label) => _buildFilterChip(label)).toList(),
-          ),
+            const SizedBox(height: 12),
+            ..._recentResults.map(
+              (result) => _SearchResultTile(
+                result: result,
+                onTap: () => _openPatient(result),
+              ),
+            ),
+          ] else ...[
+            Text(
+              'Suggested filters',
+              style: TextStyle(
+                fontSize: 13,
+                color: AppColors.textMuted.withOpacity(0.9),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children:
+                  [
+                    'Patients',
+                    'Treatments',
+                    'Invoices',
+                    'Notes',
+                    'Upcoming',
+                  ].map((label) => _buildFilterChip(label)).toList(),
+            ),
+          ],
         ] else ...[
           // Р РµР·СѓР»СЊС‚Р°С‚С‹ РїРѕРёСЃРєР°
           Row(
@@ -420,7 +574,7 @@ class _SearchResultTile extends StatelessWidget {
   final _SearchResult result;
   final VoidCallback? onTap;
 
-  const _SearchResultTile({super.key, required this.result, this.onTap});
+  const _SearchResultTile({required this.result, this.onTap});
   @override
   Widget build(BuildContext context) {
     return GestureDetector(

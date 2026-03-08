@@ -26,6 +26,49 @@ class TreatmentDataService {
         .toList();
   }
 
+  Future<List<Map<String, dynamic>>> fetchByPatient(
+    String patientId, {
+    int limit = 2000,
+  }) async {
+    final client = maybeSupabaseClient;
+    final normalized = patientId.trim();
+    if (client == null || normalized.isEmpty) return const [];
+
+    final response = await client
+        .from(_table)
+        .select()
+        .eq('patient_id', normalized)
+        .order('date', ascending: false)
+        .limit(limit);
+
+    return (response as List)
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .toList();
+  }
+
+  Stream<List<Map<String, dynamic>>> watchByPatient(
+    String patientId, {
+    int maxRows = 2000,
+  }) {
+    final client = maybeSupabaseClient;
+    final normalized = patientId.trim();
+    if (client == null || normalized.isEmpty) {
+      return Stream.value(const <Map<String, dynamic>>[]);
+    }
+
+    return client
+        .from(_table)
+        .stream(primaryKey: ['id'])
+        .eq('patient_id', normalized)
+        .map((rows) {
+          final mapped =
+              rows.map((row) => Map<String, dynamic>.from(row)).toList();
+          mapped.sort((a, b) => _asDate(b['date']).compareTo(_asDate(a['date'])));
+          if (mapped.length <= maxRows) return mapped;
+          return mapped.sublist(0, maxRows);
+        });
+  }
+
   Future<void> insert(Map<String, dynamic> payload) async {
     await _runWithSchemaFallback((row) async {
       await supabaseClient.from(_table).insert(row);
@@ -97,5 +140,12 @@ class TreatmentDataService {
       }
     });
     return mapped;
+  }
+
+  DateTime _asDate(dynamic raw) {
+    if (raw is DateTime) return raw;
+    if (raw is String) return DateTime.tryParse(raw) ?? DateTime(1970);
+    if (raw is num) return DateTime.fromMillisecondsSinceEpoch(raw.toInt());
+    return DateTime(1970);
   }
 }

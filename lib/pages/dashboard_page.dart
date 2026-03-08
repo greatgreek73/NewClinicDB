@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../models/patient_bucket.dart';
+import '../models/waitlist_stage.dart';
 import '../services/supabase_client.dart';
 import '../theme/app_colors.dart';
 import '../theme/system_ui.dart';
 import '../utils/decorations.dart';
-import '../services/patient_bucket_service.dart';
+import '../services/waitlist_service.dart';
 import 'add_patient_page.dart';
 import 'patient_3d_graph_page.dart';
 import 'patient_details_page.dart';
@@ -24,7 +24,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
   bool _isLoadingPatients = false;
   int? _todayPatientsCount;
   String? _patientsError;
-  final PatientBucketService _bucketService = PatientBucketService();
+  final WaitlistService _waitlistService = WaitlistService();
 
   @override
   void initState() {
@@ -209,7 +209,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
         const SizedBox(height: 24),
         _buildStatsGrid(),
         const SizedBox(height: 20),
-        _buildBucketPanel(),
+        _buildWaitlistPanel(),
       ],
     );
   }
@@ -455,7 +455,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
     );
   }
 
-  Widget _buildBucketPanel() {
+  Widget _buildWaitlistPanel() {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(18),
@@ -485,12 +485,12 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
           Row(
             children: [
               const Icon(
-                Icons.shopping_basket_outlined,
+                Icons.playlist_add_check_rounded,
                 color: AppColors.accent,
               ),
               const SizedBox(width: 10),
               const Text(
-                'Patient baskets',
+                'Waiting list',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -509,7 +509,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
                   border: Border.all(color: Colors.white.withOpacity(0.08)),
                 ),
                 child: const Text(
-                  '1 -> 4 priority',
+                  '4 stages',
                   style: TextStyle(fontSize: 11, color: AppColors.textMuted),
                 ),
               ),
@@ -517,49 +517,52 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Tap a basket to drop down the patients inside. Use the patient page to move people between baskets.',
+            'Tap a stage to open the queue. Reorder patients there and move them between waiting list stages.',
             style: TextStyle(
               fontSize: 13,
               color: AppColors.textMuted.withOpacity(0.9),
             ),
           ),
           const SizedBox(height: 14),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              const spacing = 12.0;
-              final maxWidth = constraints.maxWidth;
-              final columns = maxWidth >= 760 ? 4 : 2;
-              final itemWidth = (maxWidth - spacing * (columns - 1)) / columns;
+          StreamBuilder<List<WaitlistEntry>>(
+            stream: _waitlistService.watchAllWaitlistEntries(),
+            builder: (context, snapshot) {
+              final allEntries = snapshot.data ?? const <WaitlistEntry>[];
+              final isLoading =
+                  snapshot.connectionState == ConnectionState.waiting &&
+                  !snapshot.hasData;
 
-              return Wrap(
-                spacing: spacing,
-                runSpacing: spacing,
-                children:
-                    patientBuckets.map((bucket) {
-                      return SizedBox(
-                        width: itemWidth,
-                        child: StreamBuilder<List<PatientBucketEntry>>(
-                          stream: _bucketService.watchPatientsInBucket(
-                            bucket.id,
-                          ),
-                          builder: (context, snapshot) {
-                            final patients =
-                                snapshot.data ?? const <PatientBucketEntry>[];
-                            final isLoading =
-                                snapshot.connectionState ==
-                                    ConnectionState.waiting &&
-                                !snapshot.hasData;
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  const spacing = 12.0;
+                  final maxWidth = constraints.maxWidth;
+                  final columns = maxWidth >= 760 ? 4 : 2;
+                  final itemWidth =
+                      (maxWidth - spacing * (columns - 1)) / columns;
 
-                            return _DashboardBucketCard(
-                              bucket: bucket,
+                  return Wrap(
+                    spacing: spacing,
+                    runSpacing: spacing,
+                    children:
+                        waitlistStages.map((stage) {
+                          final patients =
+                              allEntries
+                                  .where((entry) => entry.stageId == stage.id)
+                                  .toList()
+                                ..sort(compareWaitlistEntries);
+
+                          return SizedBox(
+                            width: itemWidth,
+                            child: _DashboardWaitlistCard(
+                              stage: stage,
                               patients: patients,
                               isLoading: isLoading,
-                              onTap: () => _openBucketList(bucket),
-                            );
-                          },
-                        ),
-                      );
-                    }).toList(),
+                              onTap: () => _openWaitlistStage(stage),
+                            ),
+                          );
+                        }).toList(),
+                  );
+                },
               );
             },
           ),
@@ -568,16 +571,13 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
     );
   }
 
-  void _openBucketList(PatientBucketDefinition bucket) {
+  void _openWaitlistStage(WaitlistStageDefinition stage) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (ctx) {
-        return _BucketPatientsSheet(
-          bucket: bucket,
-          stream: _bucketService.watchPatientsInBucket(bucket.id),
-        );
+        return _WaitlistPatientsSheet(stage: stage, service: _waitlistService);
       },
     );
   }
@@ -858,14 +858,14 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
   }
 }
 
-class _DashboardBucketCard extends StatelessWidget {
-  final PatientBucketDefinition bucket;
-  final List<PatientBucketEntry> patients;
+class _DashboardWaitlistCard extends StatelessWidget {
+  final WaitlistStageDefinition stage;
+  final List<WaitlistEntry> patients;
   final bool isLoading;
   final VoidCallback onTap;
 
-  const _DashboardBucketCard({
-    required this.bucket,
+  const _DashboardWaitlistCard({
+    required this.stage,
     required this.patients,
     required this.isLoading,
     required this.onTap,
@@ -873,7 +873,7 @@ class _DashboardBucketCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final baseColor = bucket.color;
+    final baseColor = stage.color;
 
     return GestureDetector(
       onTap: onTap,
@@ -900,50 +900,71 @@ class _DashboardBucketCard extends StatelessWidget {
             ),
           ],
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: 46,
-              height: 46,
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white.withOpacity(0.1)),
-              ),
-              child: Icon(
-                Icons.shopping_basket_rounded,
-                size: 22,
-                color: baseColor,
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.white.withOpacity(0.1)),
+                  ),
+                  child: Icon(stage.icon, size: 22, color: baseColor),
+                ),
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.white.withOpacity(0.14)),
+                  ),
+                  child: Center(
+                    child:
+                        isLoading
+                            ? SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation(baseColor),
+                              ),
+                            )
+                            : Text(
+                              '${patients.length}',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              stage.title,
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary,
               ),
             ),
-            Container(
-              width: 46,
-              height: 46,
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white.withOpacity(0.14)),
-              ),
-              child: Center(
-                child:
-                    isLoading
-                        ? SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation(baseColor),
-                          ),
-                        )
-                        : Text(
-                          '${patients.length}',
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
+            const SizedBox(height: 6),
+            Text(
+              stage.description,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: AppColors.textMuted.withOpacity(0.88),
               ),
             ),
           ],
@@ -953,15 +974,34 @@ class _DashboardBucketCard extends StatelessWidget {
   }
 }
 
-class _BucketPatientsSheet extends StatelessWidget {
-  final PatientBucketDefinition bucket;
-  final Stream<List<PatientBucketEntry>> stream;
+class _WaitlistPatientsSheet extends StatelessWidget {
+  final WaitlistStageDefinition stage;
+  final WaitlistService service;
 
-  const _BucketPatientsSheet({required this.bucket, required this.stream});
+  const _WaitlistPatientsSheet({required this.stage, required this.service});
 
   @override
   Widget build(BuildContext context) {
     final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
+    Future<void> runAction(
+      Future<void> Function() action, {
+      String? successMessage,
+    }) async {
+      try {
+        await action();
+        if (!context.mounted) return;
+        if (successMessage != null && successMessage.isNotEmpty) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(successMessage)));
+        }
+      } catch (error) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not update waiting list: $error')),
+        );
+      }
+    }
 
     return Padding(
       padding: EdgeInsets.fromLTRB(16, 16, 16, bottomPadding + 16),
@@ -1002,185 +1042,353 @@ class _BucketPatientsSheet extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 12),
-              StreamBuilder<List<PatientBucketEntry>>(
-                stream: stream,
-                builder: (context, snapshot) {
-                  final patients =
-                      snapshot.data ?? const <PatientBucketEntry>[];
-                  final isLoading =
-                      snapshot.connectionState == ConnectionState.waiting &&
-                      !snapshot.hasData;
+              FutureBuilder<WaitlistSchemaCapabilities>(
+                future: service.getCapabilities(),
+                builder: (context, capabilitiesSnapshot) {
+                  final capabilities = capabilitiesSnapshot.data;
+                  final supportsOrdering =
+                      capabilities?.supportsPersistentOrdering ?? true;
 
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
+                  return StreamBuilder<List<WaitlistEntry>>(
+                    stream: service.watchPatientsInStage(stage.id),
+                    builder: (context, snapshot) {
+                      final patients = snapshot.data ?? const <WaitlistEntry>[];
+                      final isLoading =
+                          snapshot.connectionState == ConnectionState.waiting &&
+                          !snapshot.hasData;
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color: Colors.white.withOpacity(0.1),
-                              ),
-                            ),
-                            child: Icon(bucket.icon, color: bucket.color),
-                          ),
-                          const SizedBox(width: 12),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          Row(
                             children: [
-                              Text(
-                                bucket.title,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.textPrimary,
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(0.1),
+                                  ),
                                 ),
+                                child: Icon(stage.icon, color: stage.color),
                               ),
-                              Text(
-                                'Patients in basket ${bucket.id}',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: AppColors.textMuted.withOpacity(0.85),
+                              const SizedBox(width: 12),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    stage.title,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.textPrimary,
+                                    ),
+                                  ),
+                                  Text(
+                                    'Queue for stage ${stage.id}',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: AppColors.textMuted.withOpacity(
+                                        0.85,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const Spacer(),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: stage.color.withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: stage.color.withOpacity(0.35),
+                                  ),
+                                ),
+                                child: Text(
+                                  '${patients.length}',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: stage.color.withOpacity(0.9),
+                                  ),
                                 ),
                               ),
                             ],
                           ),
-                          const Spacer(),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: bucket.color.withOpacity(0.15),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: bucket.color.withOpacity(0.35),
+                          if (capabilities?.needsWaitlistMigration ??
+                              false) ...[
+                            const SizedBox(height: 12),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.05),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: Colors.white.withOpacity(0.08),
+                                ),
+                              ),
+                              child: Text(
+                                supportsOrdering
+                                    ? 'This project is still using the legacy waitlist field. Apply the Supabase migration to finish the schema update.'
+                                    : 'Queue order is read-only until the Supabase waitlist migration is applied.',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: AppColors.textMuted.withOpacity(0.9),
+                                ),
                               ),
                             ),
-                            child: Text(
-                              '${patients.length}',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                                color: bucket.color.withOpacity(0.9),
+                          ],
+                          const SizedBox(height: 14),
+                          if (isLoading)
+                            LinearProgressIndicator(
+                              minHeight: 4,
+                              valueColor: AlwaysStoppedAnimation(stage.color),
+                              backgroundColor: Colors.white.withOpacity(0.08),
+                            )
+                          else if (patients.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              child: Text(
+                                'No patients are in this waiting list stage yet.',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: AppColors.textMuted.withOpacity(0.85),
+                                ),
                               ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      if (isLoading)
-                        LinearProgressIndicator(
-                          minHeight: 4,
-                          valueColor: AlwaysStoppedAnimation(bucket.color),
-                          backgroundColor: Colors.white.withOpacity(0.08),
-                        )
-                      else if (patients.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          child: Text(
-                            'No patients are assigned here yet.',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: AppColors.textMuted.withOpacity(0.85),
-                            ),
-                          ),
-                        )
-                      else
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxHeight: 420),
-                          child: ListView.separated(
-                            shrinkWrap: true,
-                            physics: const BouncingScrollPhysics(),
-                            itemBuilder: (context, index) {
-                              final patient = patients[index];
-                              return GestureDetector(
-                                onTap: () {
-                                  Navigator.of(context).pop();
-                                  Navigator.of(context).pushNamed(
-                                    PatientDetailsPage.routeName,
-                                    arguments: PatientDetailsArgs(
-                                      patientId: patient.id,
-                                      displayName: patient.title,
+                            )
+                          else
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxHeight: 420),
+                              child: ListView.separated(
+                                shrinkWrap: true,
+                                physics: const BouncingScrollPhysics(),
+                                itemBuilder: (context, index) {
+                                  final patient = patients[index];
+                                  final hasPrevStage = stage.id > 1;
+                                  final hasNextStage =
+                                      stage.id < waitlistStages.length;
+
+                                  return Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.05),
+                                      borderRadius: BorderRadius.circular(14),
+                                      border: Border.all(
+                                        color: Colors.white.withOpacity(0.08),
+                                      ),
                                     ),
-                                  );
-                                },
-                                child: Container(
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.05),
-                                    borderRadius: BorderRadius.circular(14),
-                                    border: Border.all(
-                                      color: Colors.white.withOpacity(0.08),
-                                    ),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      CircleAvatar(
-                                        radius: 18,
-                                        backgroundColor: bucket.color
-                                            .withOpacity(0.15),
-                                        child: Text(
-                                          patient.title.isNotEmpty
-                                              ? patient.title[0].toUpperCase()
-                                              : '?',
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w700,
-                                            color: AppColors.textPrimary,
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        CircleAvatar(
+                                          radius: 18,
+                                          backgroundColor: stage.color
+                                              .withOpacity(0.15),
+                                          child: Text(
+                                            '${patient.order ?? index + 1}',
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                              color: AppColors.textPrimary,
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              patient.title,
-                                              style: const TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.w600,
-                                                color: AppColors.textPrimary,
-                                              ),
-                                            ),
-                                            if (patient.subtitle.isNotEmpty)
-                                              Padding(
-                                                padding: const EdgeInsets.only(
-                                                  top: 4,
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: GestureDetector(
+                                            onTap: () {
+                                              Navigator.of(context).pop();
+                                              Navigator.of(context).pushNamed(
+                                                PatientDetailsPage.routeName,
+                                                arguments: PatientDetailsArgs(
+                                                  patientId: patient.id,
+                                                  displayName: patient.title,
                                                 ),
-                                                child: Text(
-                                                  patient.subtitle,
+                                              );
+                                            },
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  patient.title,
+                                                  style: const TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w600,
+                                                    color:
+                                                        AppColors.textPrimary,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  'Queue #${patient.order ?? index + 1}',
                                                   style: TextStyle(
                                                     fontSize: 12,
                                                     color: AppColors.textMuted
-                                                        .withOpacity(0.85),
+                                                        .withOpacity(0.82),
                                                   ),
                                                 ),
+                                                if (patient.subtitle.isNotEmpty)
+                                                  Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                          top: 4,
+                                                        ),
+                                                    child: Text(
+                                                      patient.subtitle,
+                                                      style: TextStyle(
+                                                        fontSize: 12,
+                                                        color: AppColors
+                                                            .textMuted
+                                                            .withOpacity(0.85),
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            IconButton(
+                                              tooltip: 'Move up',
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              onPressed:
+                                                  !supportsOrdering ||
+                                                          index == 0
+                                                      ? null
+                                                      : () => runAction(
+                                                        () => service
+                                                            .movePatientUp(
+                                                              patient.id,
+                                                            ),
+                                                      ),
+                                              icon: const Icon(
+                                                Icons.keyboard_arrow_up_rounded,
+                                                size: 20,
                                               ),
+                                              color: AppColors.textPrimary,
+                                            ),
+                                            IconButton(
+                                              tooltip: 'Move down',
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              onPressed:
+                                                  !supportsOrdering ||
+                                                          index ==
+                                                              patients.length -
+                                                                  1
+                                                      ? null
+                                                      : () => runAction(
+                                                        () => service
+                                                            .movePatientDown(
+                                                              patient.id,
+                                                            ),
+                                                      ),
+                                              icon: const Icon(
+                                                Icons
+                                                    .keyboard_arrow_down_rounded,
+                                                size: 20,
+                                              ),
+                                              color: AppColors.textPrimary,
+                                            ),
                                           ],
                                         ),
-                                      ),
-                                      const Icon(
-                                        Icons.chevron_right,
-                                        color: AppColors.textMuted,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            },
-                            separatorBuilder:
-                                (_, __) => const SizedBox(height: 10),
-                            itemCount: patients.length,
-                          ),
-                        ),
-                    ],
+                                        Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            IconButton(
+                                              tooltip: 'Move to previous stage',
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              onPressed:
+                                                  !hasPrevStage
+                                                      ? null
+                                                      : () => runAction(
+                                                        () => service
+                                                            .movePatientToStage(
+                                                              patient.id,
+                                                              stage.id - 1,
+                                                            ),
+                                                        successMessage:
+                                                            'Moved ${patient.title} to ${waitlistStageById(stage.id - 1)?.title ?? 'stage ${stage.id - 1}'}.',
+                                                      ),
+                                              icon: const Icon(
+                                                Icons
+                                                    .arrow_back_ios_new_rounded,
+                                                size: 16,
+                                              ),
+                                              color: AppColors.textPrimary,
+                                            ),
+                                            IconButton(
+                                              tooltip: 'Move to next stage',
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              onPressed:
+                                                  !hasNextStage
+                                                      ? null
+                                                      : () => runAction(
+                                                        () => service
+                                                            .movePatientToStage(
+                                                              patient.id,
+                                                              stage.id + 1,
+                                                            ),
+                                                        successMessage:
+                                                            'Moved ${patient.title} to ${waitlistStageById(stage.id + 1)?.title ?? 'stage ${stage.id + 1}'}.',
+                                                      ),
+                                              icon: const Icon(
+                                                Icons.arrow_forward_ios_rounded,
+                                                size: 16,
+                                              ),
+                                              color: AppColors.textPrimary,
+                                            ),
+                                          ],
+                                        ),
+                                        IconButton(
+                                          tooltip: 'Remove from waiting list',
+                                          visualDensity: VisualDensity.compact,
+                                          onPressed:
+                                              () => runAction(
+                                                () =>
+                                                    service.removeFromWaitlist(
+                                                      patient.id,
+                                                    ),
+                                                successMessage:
+                                                    'Removed ${patient.title} from waiting list.',
+                                              ),
+                                          icon: const Icon(
+                                            Icons.close_rounded,
+                                            size: 18,
+                                          ),
+                                          color: Colors.redAccent.withOpacity(
+                                            0.9,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                                separatorBuilder:
+                                    (_, __) => const SizedBox(height: 10),
+                                itemCount: patients.length,
+                              ),
+                            ),
+                        ],
+                      );
+                    },
                   );
                 },
               ),

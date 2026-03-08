@@ -9,16 +9,14 @@ class DentalChartRepository {
   final TreatmentDataService _treatments;
 
   Stream<Map<String, ToothCondition>> watchChart(String patientId) {
-    return _treatments.watchAll().map((rows) {
-      final patientRows = _filterByPatient(rows, patientId);
-      return _buildPlanFromTreatments(patientRows);
-    });
+    return _treatments
+        .watchByPatient(patientId, maxRows: 4000)
+        .map(_buildPlanFromTreatments);
   }
 
   Future<Map<String, ToothCondition>> loadChart(String patientId) async {
-    final rows = await _treatments.fetchAll();
-    final patientRows = _filterByPatient(rows, patientId);
-    return _buildPlanFromTreatments(patientRows);
+    final rows = await _treatments.fetchByPatient(patientId, limit: 4000);
+    return _buildPlanFromTreatments(rows);
   }
 
   Future<void> setToothStatus(
@@ -73,11 +71,15 @@ class DentalChartRepository {
     String patientId, {
     int limit = 500,
   }) {
-    return _treatments.watchAll(maxRows: limit * 4).map((rows) {
-      final patientRows = _latestRows(_filterByPatient(rows, patientId), limit);
+    return _treatments.watchByPatient(patientId, maxRows: limit * 4).map((
+      rows,
+    ) {
+      final patientRows = _latestRows(rows, limit);
       final Map<String, Set<String>> aggregated = {};
 
       for (final row in patientRows) {
+        if (!_isCompletedTreatmentRow(row)) continue;
+
         final types = _extractTreatmentTypes(row);
         if (types.isEmpty) continue;
 
@@ -97,26 +99,16 @@ class DentalChartRepository {
     String? patientId,
     int limit = 800,
   }) async {
-    final rows = await _treatments.fetchAll(limit: limit * 2);
-    final scoped =
-        patientId == null ? rows : _filterByPatient(rows, patientId, limit);
+    final rows =
+        patientId == null
+            ? await _treatments.fetchAll(limit: limit * 2)
+            : await _treatments.fetchByPatient(patientId, limit: limit * 2);
 
     final types = <String>{};
-    for (final row in scoped) {
+    for (final row in rows) {
       types.addAll(_extractTreatmentTypes(row));
     }
     return types;
-  }
-
-  List<Map<String, dynamic>> _filterByPatient(
-    List<Map<String, dynamic>> rows,
-    String patientId, [
-    int? limit,
-  ]) {
-    final filtered =
-        rows.where((row) => _matchesPatient(row, patientId)).toList();
-    if (limit == null) return filtered;
-    return _latestRows(filtered, limit);
   }
 
   List<Map<String, dynamic>> _latestRows(
@@ -130,12 +122,6 @@ class DentalChartRepository {
     return rows;
   }
 
-  bool _matchesPatient(Map<String, dynamic> data, String patientId) {
-    final raw = data['patient_id'];
-    final resolved = raw?.toString().trim();
-    return resolved != null && resolved == patientId;
-  }
-
   Map<String, ToothCondition> _buildPlanFromTreatments(
     List<Map<String, dynamic>> rows,
   ) {
@@ -145,7 +131,7 @@ class DentalChartRepository {
           ..sort((a, b) => _asDate(a['date']).compareTo(_asDate(b['date'])));
 
     for (final row in ordered) {
-      final status = toothConditionFromString(row['status']?.toString());
+      final status = _resolveChartCondition(row);
       final teeth = _extractToothNumbers(row);
       for (final tooth in teeth) {
         if (status == ToothCondition.healthy) {
@@ -156,6 +142,19 @@ class DentalChartRepository {
       }
     }
     return plan;
+  }
+
+  ToothCondition _resolveChartCondition(Map<String, dynamic> row) {
+    final rawStatus = row['status']?.toString().trim();
+    if ((rawStatus == null || rawStatus.isEmpty) &&
+        _extractTreatmentTypes(row).isNotEmpty) {
+      return ToothCondition.treated;
+    }
+    return toothConditionFromString(rawStatus);
+  }
+
+  bool _isCompletedTreatmentRow(Map<String, dynamic> row) {
+    return _resolveChartCondition(row) == ToothCondition.treated;
   }
 
   List<String> _extractToothNumbers(Map<String, dynamic> data) {

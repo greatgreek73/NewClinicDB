@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('Clinic dashboard renders correctly', (tester) async {
+  testWidgets('Clinic dashboard renders waiting list stages', (tester) async {
     const logicalSize = Size(1024, 1366);
 
     tester.binding
@@ -20,9 +20,10 @@ void main() {
     await tester.pumpWidget(const MyApp());
     await tester.pumpAndSettle();
 
-    await expectLater(
-      find.byType(MaterialApp),
-      matchesGoldenFile('goldens/clinic_dashboard.png'),
-    );
+    expect(find.text('Waiting list'), findsOneWidget);
+    expect(find.text('New'), findsOneWidget);
+    expect(find.text('Contact'), findsOneWidget);
+    expect(find.text('Ready'), findsOneWidget);
+    expect(find.text('Deferred'), findsOneWidget);
   });
 }

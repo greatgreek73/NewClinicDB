@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
 
-import '../models/patient_bucket.dart';
+import '../models/waitlist_stage.dart';
 import '../models/tooth_condition.dart';
 import '../models/treatment_palette.dart';
 import '../services/dental_chart_repository.dart';
 import '../services/id_generator.dart';
-import '../services/patient_bucket_service.dart';
 import '../services/supabase_client.dart';
 import '../services/treatment_data_service.dart';
+import '../services/waitlist_service.dart';
 import '../theme/app_colors.dart';
 import '../utils/decorations.dart';
+import '../utils/patient_name_formatter.dart';
+import 'treatment_timeline_utils.dart';
 import '../widgets/page_header.dart';
 import '../widgets/primary_page_scaffold.dart';
 
@@ -45,23 +47,36 @@ class _PatientDetailsContent extends StatefulWidget {
 
 class _PatientDetailsContentState extends State<_PatientDetailsContent> {
   final DentalChartRepository _chartRepository = DentalChartRepository();
-  final PatientBucketService _bucketService = PatientBucketService();
+  final WaitlistService _waitlistService = WaitlistService();
 
   ToothCondition? _selectedCondition;
   Stream<Map<String, ToothCondition>>? _chartStream;
   Stream<Map<String, List<String>>>? _treatmentsStream;
   final TreatmentPalette _treatmentPalette = TreatmentPalette();
   String? _selectedTreatmentType;
-  bool _isSavingBucket = false;
+  bool _isSavingWaitlist = false;
 
   @override
   void initState() {
     super.initState();
     final patientId = widget.args?.patientId;
     if (patientId != null) {
-      _chartStream = _chartRepository.watchChart(patientId);
-      _treatmentsStream = _chartRepository.watchTreatmentsByTooth(patientId);
+      _rebuildTreatmentStreams(patientId);
     }
+  }
+
+  void _rebuildTreatmentStreams(String patientId) {
+    _chartStream = _chartRepository.watchChart(patientId);
+    _treatmentsStream = _chartRepository.watchTreatmentsByTooth(patientId);
+  }
+
+  void _handleTreatmentsChanged() {
+    final patientId = widget.args?.patientId.trim() ?? '';
+    if (patientId.isEmpty || !mounted) return;
+
+    setState(() {
+      _rebuildTreatmentStreams(patientId);
+    });
   }
 
   @override
@@ -77,7 +92,7 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
         final isLoadingName =
             patientId != null &&
             snapshot.connectionState == ConnectionState.waiting;
-        final initialBucket = PatientBucketService.bucketFromData(data);
+        final initialWaitlist = waitlistAssignmentFromData(data);
         final paymentStats = _computePaymentStats(data);
 
         return LayoutBuilder(
@@ -88,15 +103,20 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
               resolvedName: resolvedName,
               isLoadingName: isLoadingName,
               patientId: patientId,
-              initialBucket: initialBucket,
-              isSavingBucket: _isSavingBucket,
-              bucketService: _bucketService,
-              onBucketSelect: _handleBucketSelect,
+              initialWaitlist: initialWaitlist,
+              isSavingWaitlist: _isSavingWaitlist,
+              waitlistService: _waitlistService,
+              onAddToWaitlist: _handleAddToWaitlist,
+              onStageSelect: _handleStageSelect,
+              onRemoveFromWaitlist: _handleRemoveFromWaitlist,
               totalCostText: _formatMoney(paymentStats.totalCost),
               paidTotalText: _formatMoney(paymentStats.totalPaid),
             );
 
-            final scheduleCard = _ScheduleCard(patientId: patientId);
+            final scheduleCard = _ScheduleCard(
+              patientId: patientId,
+              onTreatmentsChanged: _handleTreatmentsChanged,
+            );
 
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -126,7 +146,7 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
                 const SizedBox(height: 28),
                 _buildDentalChart(patientId),
                 const SizedBox(height: 16),
-                _buildBucketSummary(patientId, initialBucket),
+                _buildWaitlistSummary(patientId, initialWaitlist),
               ],
             );
           },
@@ -150,7 +170,10 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
     return Map<String, dynamic>.from(response as Map);
   }
 
-  Widget _buildBucketSummary(String? patientId, int? initialBucket) {
+  Widget _buildWaitlistSummary(
+    String? patientId,
+    WaitlistAssignment initialWaitlist,
+  ) {
     final resolvedId = patientId;
     return Container(
       width: double.infinity,
@@ -166,7 +189,7 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Priority basket status',
+                  'Waiting list status',
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
@@ -174,22 +197,30 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                StreamBuilder<int?>(
+                StreamBuilder<WaitlistAssignment>(
                   stream:
                       resolvedId == null
-                          ? const Stream.empty()
-                          : _bucketService.watchPatientBucket(resolvedId),
-                  initialData: initialBucket,
+                          ? Stream.value(initialWaitlist)
+                          : _waitlistService.watchPatientWaitlist(resolvedId),
+                  initialData: initialWaitlist,
                   builder: (context, snapshot) {
-                    final bucketId = snapshot.data ?? initialBucket;
-                    final bucket =
-                        bucketId != null ? bucketById(bucketId) : null;
-                    final title = bucket?.title ?? 'No basket selected';
+                    final assignment = snapshot.data ?? initialWaitlist;
+                    final stage =
+                        assignment.stageId != null
+                            ? waitlistStageById(assignment.stageId!)
+                            : null;
+                    final title = stage?.title ?? 'Not on waiting list';
                     final desc =
-                        bucket?.description ??
-                        'Choose a basket at the top near the name.';
+                        stage?.description ??
+                        'Add this patient to the waiting list from the card above.';
+                    final queueLine =
+                        assignment.order != null
+                            ? ' Queue position #${assignment.order}.'
+                            : assignment.isOnWaitlist
+                            ? ' Queue order will appear after the database migration is applied.'
+                            : '';
                     return Text(
-                      '$title — $desc',
+                      '$title — $desc$queueLine',
                       style: TextStyle(
                         fontSize: 12,
                         color: AppColors.textMuted.withOpacity(0.9),
@@ -201,46 +232,112 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
             ),
           ),
           const SizedBox(width: 12),
-          _BucketIconRow(
-            activeBucket: initialBucket,
-            enabled: false,
-            isSaving: false,
-            onTap: null,
+          StreamBuilder<WaitlistAssignment>(
+            stream:
+                resolvedId == null
+                    ? Stream.value(initialWaitlist)
+                    : _waitlistService.watchPatientWaitlist(resolvedId),
+            initialData: initialWaitlist,
+            builder: (context, snapshot) {
+              final assignment = snapshot.data ?? initialWaitlist;
+              return _WaitlistStageRow(
+                activeStageId: assignment.stageId,
+                enabled: false,
+                isSaving: false,
+                onTap: null,
+              );
+            },
           ),
         ],
       ),
     );
   }
 
-  Future<void> _handleBucketSelect(
-    String patientId,
-    int bucketId,
-    int? currentBucket,
-  ) async {
-    if (_isSavingBucket || currentBucket == bucketId) return;
+  Future<void> _handleAddToWaitlist(String patientId) async {
+    if (_isSavingWaitlist) return;
     setState(() {
-      _isSavingBucket = true;
+      _isSavingWaitlist = true;
     });
 
     try {
-      await _bucketService.setPatientBucket(patientId, bucketId);
+      await _waitlistService.addPatientToWaitlist(patientId);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Assigned to ${bucketById(bucketId)?.title ?? 'bucket $bucketId'}.',
-          ),
-        ),
+        const SnackBar(content: Text('Added to waiting list: New.')),
       );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not update bucket: $error')),
+        SnackBar(content: Text('Could not add to waiting list: $error')),
       );
     } finally {
       if (mounted) {
         setState(() {
-          _isSavingBucket = false;
+          _isSavingWaitlist = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _handleStageSelect(
+    String patientId,
+    int stageId,
+    WaitlistAssignment currentAssignment,
+  ) async {
+    if (_isSavingWaitlist || currentAssignment.stageId == stageId) return;
+    setState(() {
+      _isSavingWaitlist = true;
+    });
+
+    try {
+      if (currentAssignment.isOnWaitlist) {
+        await _waitlistService.movePatientToStage(patientId, stageId);
+      } else {
+        await _waitlistService.addPatientToWaitlist(
+          patientId,
+          stageId: stageId,
+        );
+      }
+      if (!mounted) return;
+      final stageTitle = waitlistStageById(stageId)?.title ?? 'stage $stageId';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Moved to $stageTitle.')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not update waiting list: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSavingWaitlist = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _handleRemoveFromWaitlist(String patientId) async {
+    if (_isSavingWaitlist) return;
+    setState(() {
+      _isSavingWaitlist = true;
+    });
+
+    try {
+      await _waitlistService.removeFromWaitlist(patientId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Removed from waiting list.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not remove from waiting list: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSavingWaitlist = false;
         });
       }
     }
@@ -373,13 +470,11 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
 
   String _resolvePatientName(Map<String, dynamic>? data, String fallbackName) {
     if (data == null) return fallbackName;
-    final first = data['name']?.toString().trim() ?? '';
-    final last = data['surname']?.toString().trim() ?? '';
-    final combined = (first + ' ' + last).trim();
-    if (combined.isNotEmpty) return combined;
-    if (last.isNotEmpty) return last;
-    if (first.isNotEmpty) return first;
-    return fallbackName;
+    return formatPatientDisplayName(
+      name: data['name'],
+      surname: data['surname'],
+      fallback: fallbackName,
+    );
   }
 
   PaymentStats _computePaymentStats(Map<String, dynamic>? data) {
@@ -423,27 +518,35 @@ class PaymentStats {
       const PaymentStats(totalCost: null, totalPaid: 0);
 }
 
-class _InlineBucketSelector extends StatelessWidget {
+class _InlineWaitlistControls extends StatelessWidget {
   final String? patientId;
-  final int? initialBucket;
+  final WaitlistAssignment initialWaitlist;
   final bool isSaving;
-  final PatientBucketService bucketService;
-  final void Function(int bucketId, int? currentBucket)? onSelect;
+  final WaitlistService waitlistService;
+  final Future<void> Function(String patientId)? onAdd;
+  final Future<void> Function(
+    String patientId,
+    int stageId,
+    WaitlistAssignment currentAssignment,
+  )?
+  onStageSelect;
+  final Future<void> Function(String patientId)? onRemove;
 
-  const _InlineBucketSelector({
+  const _InlineWaitlistControls({
     required this.patientId,
-    required this.initialBucket,
+    required this.initialWaitlist,
     required this.isSaving,
-    required this.bucketService,
-    required this.onSelect,
+    required this.waitlistService,
+    required this.onAdd,
+    required this.onStageSelect,
+    required this.onRemove,
   });
 
   @override
   Widget build(BuildContext context) {
-    final hasPatient = patientId != null;
-    if (!hasPatient) {
-      return _BucketIconRow(
-        activeBucket: initialBucket,
+    if (patientId == null) {
+      return _WaitlistStageRow(
+        activeStageId: initialWaitlist.stageId,
         enabled: false,
         isSaving: false,
         onTap: null,
@@ -451,34 +554,106 @@ class _InlineBucketSelector extends StatelessWidget {
     }
 
     final resolvedId = patientId!;
-    return StreamBuilder<int?>(
-      stream: bucketService.watchPatientBucket(resolvedId),
-      initialData: initialBucket,
+    return StreamBuilder<WaitlistAssignment>(
+      stream: waitlistService.watchPatientWaitlist(resolvedId),
+      initialData: initialWaitlist,
       builder: (context, snapshot) {
-        final activeBucket = snapshot.data ?? initialBucket;
+        final assignment = snapshot.data ?? initialWaitlist;
         final isStreamLoading =
             snapshot.connectionState == ConnectionState.waiting &&
-            activeBucket == null;
+            assignment.stageId == null;
+        final isBusy = isSaving || isStreamLoading;
 
-        return _BucketIconRow(
-          activeBucket: activeBucket,
-          enabled: !isSaving && !isStreamLoading,
-          isSaving: isSaving || isStreamLoading,
-          onTap: (bucketId) => onSelect?.call(bucketId, activeBucket),
+        if (!assignment.isOnWaitlist) {
+          return OutlinedButton.icon(
+            onPressed: isBusy ? null : () => onAdd?.call(resolvedId),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.textPrimary,
+              side: BorderSide(color: Colors.white.withOpacity(0.18)),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+            icon:
+                isBusy
+                    ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation(AppColors.accent),
+                      ),
+                    )
+                    : const Icon(Icons.playlist_add_rounded, size: 18),
+            label: const Text('Add to waiting list'),
+          );
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _WaitlistStageRow(
+              activeStageId: assignment.stageId,
+              enabled: !isBusy,
+              isSaving: isBusy,
+              onTap:
+                  (stageId) =>
+                      onStageSelect?.call(resolvedId, stageId, assignment),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: Colors.white.withOpacity(0.1)),
+                  ),
+                  child: Text(
+                    'Queue #${assignment.order ?? '—'}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textMuted.withOpacity(0.9),
+                    ),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: isBusy ? null : () => onRemove?.call(resolvedId),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.redAccent.withOpacity(0.95),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                  ),
+                  icon: const Icon(Icons.close_rounded, size: 18),
+                  label: const Text('Remove'),
+                ),
+              ],
+            ),
+          ],
         );
       },
     );
   }
 }
 
-class _BucketIconRow extends StatelessWidget {
-  final int? activeBucket;
+class _WaitlistStageRow extends StatelessWidget {
+  final int? activeStageId;
   final bool enabled;
   final bool isSaving;
   final ValueChanged<int>? onTap;
 
-  const _BucketIconRow({
-    required this.activeBucket,
+  const _WaitlistStageRow({
+    required this.activeStageId,
     required this.enabled,
     required this.isSaving,
     required this.onTap,
@@ -488,15 +663,15 @@ class _BucketIconRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        ...patientBuckets.map((bucket) {
-          final isActive = bucket.id == activeBucket;
+        ...waitlistStages.map((stage) {
+          final isActive = stage.id == activeStageId;
           return Padding(
             padding: const EdgeInsets.only(right: 6),
-            child: _BucketMiniIcon(
-              bucket: bucket,
+            child: _WaitlistStageIcon(
+              stage: stage,
               isActive: isActive,
               enabled: enabled,
-              onTap: onTap == null ? null : () => onTap!(bucket.id),
+              onTap: onTap == null ? null : () => onTap!(stage.id),
             ),
           );
         }),
@@ -517,14 +692,14 @@ class _BucketIconRow extends StatelessWidget {
   }
 }
 
-class _BucketMiniIcon extends StatelessWidget {
-  final PatientBucketDefinition bucket;
+class _WaitlistStageIcon extends StatelessWidget {
+  final WaitlistStageDefinition stage;
   final bool isActive;
   final bool enabled;
   final VoidCallback? onTap;
 
-  const _BucketMiniIcon({
-    required this.bucket,
+  const _WaitlistStageIcon({
+    required this.stage,
     required this.isActive,
     required this.enabled,
     this.onTap,
@@ -532,14 +707,14 @@ class _BucketMiniIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = bucket.color;
+    final color = stage.color;
     final bg =
         isActive ? color.withOpacity(0.35) : Colors.white.withOpacity(0.08);
 
     return GestureDetector(
       onTap: enabled ? onTap : null,
       child: Tooltip(
-        message: '${bucket.title} (basket ${bucket.id})',
+        message: '${stage.title} (stage ${stage.id})',
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
           width: 34,
@@ -565,7 +740,7 @@ class _BucketMiniIcon extends StatelessWidget {
                     : [],
           ),
           child: Icon(
-            Icons.shopping_basket_rounded,
+            stage.icon,
             size: 18,
             color:
                 enabled
@@ -584,15 +759,17 @@ class _InfoCard extends StatelessWidget {
   final String resolvedName;
   final bool isLoadingName;
   final String? patientId;
-  final int? initialBucket;
-  final bool isSavingBucket;
-  final PatientBucketService bucketService;
+  final WaitlistAssignment initialWaitlist;
+  final bool isSavingWaitlist;
+  final WaitlistService waitlistService;
+  final Future<void> Function(String patientId)? onAddToWaitlist;
   final Future<void> Function(
     String patientId,
-    int bucketId,
-    int? currentBucket,
+    int stageId,
+    WaitlistAssignment currentAssignment,
   )?
-  onBucketSelect;
+  onStageSelect;
+  final Future<void> Function(String patientId)? onRemoveFromWaitlist;
   final String totalCostText;
   final String paidTotalText;
 
@@ -600,10 +777,12 @@ class _InfoCard extends StatelessWidget {
     required this.resolvedName,
     required this.isLoadingName,
     required this.patientId,
-    required this.initialBucket,
-    required this.isSavingBucket,
-    required this.bucketService,
-    required this.onBucketSelect,
+    required this.initialWaitlist,
+    required this.isSavingWaitlist,
+    required this.waitlistService,
+    required this.onAddToWaitlist,
+    required this.onStageSelect,
+    required this.onRemoveFromWaitlist,
     required this.totalCostText,
     required this.paidTotalText,
   });
@@ -653,15 +832,14 @@ class _InfoCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    _InlineBucketSelector(
+                    _InlineWaitlistControls(
                       patientId: patientId,
-                      initialBucket: initialBucket,
-                      isSaving: isSavingBucket,
-                      bucketService: bucketService,
-                      onSelect: (bucketId, currentBucket) {
-                        if (patientId == null || onBucketSelect == null) return;
-                        onBucketSelect!(patientId!, bucketId, currentBucket);
-                      },
+                      initialWaitlist: initialWaitlist,
+                      isSaving: isSavingWaitlist,
+                      waitlistService: waitlistService,
+                      onAdd: onAddToWaitlist,
+                      onStageSelect: onStageSelect,
+                      onRemove: onRemoveFromWaitlist,
                     ),
                   ],
                 ),
@@ -758,12 +936,60 @@ class _InfoCard extends StatelessWidget {
   }
 }
 
-class _ScheduleCard extends StatelessWidget {
+class _ScheduleCard extends StatefulWidget {
   final String? patientId;
+  final VoidCallback? onTreatmentsChanged;
 
-  const _ScheduleCard({Key? key, this.patientId}) : super(key: key);
+  const _ScheduleCard({Key? key, this.patientId, this.onTreatmentsChanged})
+    : super(key: key);
+
+  @override
+  State<_ScheduleCard> createState() => _ScheduleCardState();
+}
+
+class _ScheduleCardState extends State<_ScheduleCard> {
+  final TreatmentDataService _treatmentStore = TreatmentDataService();
+  late Future<List<Map<String, dynamic>>> _timelineFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _timelineFuture = _loadTimeline();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ScheduleCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.patientId != widget.patientId) {
+      _timelineFuture = _loadTimeline();
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _loadTimeline() async {
+    final patientId = widget.patientId?.trim();
+    if (patientId == null || patientId.isEmpty) {
+      return const <Map<String, dynamic>>[];
+    }
+
+    return _treatmentStore.fetchByPatient(patientId, limit: 120);
+  }
+
+  void _refreshTimeline() {
+    if (!mounted) return;
+    setState(() {
+      _timelineFuture = _loadTimeline();
+    });
+  }
+
+  void _handleTreatmentsChanged() {
+    _refreshTimeline();
+    widget.onTreatmentsChanged?.call();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final patientId = widget.patientId;
+
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: buildSurfaceCardDecoration(),
@@ -774,7 +1000,7 @@ class _ScheduleCard extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  'Upcoming treatments',
+                  'Completed treatments',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
@@ -786,14 +1012,17 @@ class _ScheduleCard extends StatelessWidget {
                 onPressed:
                     patientId == null
                         ? null
-                        : () {
-                          showDialog(
+                        : () async {
+                          final created = await showDialog<bool>(
                             context: context,
                             barrierDismissible: true,
                             builder:
                                 (ctx) =>
-                                    _AddTreatmentDialog(patientId: patientId!),
+                                    _AddTreatmentDialog(patientId: patientId),
                           );
+                          if (created == true) {
+                            _handleTreatmentsChanged();
+                          }
                         },
                 style: TextButton.styleFrom(
                   foregroundColor: AppColors.accent,
@@ -811,34 +1040,73 @@ class _ScheduleCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 16),
-          ...[
-            _AppointmentRow(
-              date: '20 Nov',
-              title: 'Implant planning session',
-              meta: 'Dr. Emily Ross - Room 4',
-              highlight: true,
-            ),
-            _AppointmentRow(
-              date: '04 Dec',
-              title: 'Crown placement & hygiene',
-              meta: 'Dr. Gomez - Room 1',
-            ),
-            _AppointmentRow(
-              date: '11 Jan',
-              title: 'Follow-up & whitening',
-              meta: 'Dr. Emily Ross - Room 2',
-            ),
-          ],
+          FutureBuilder<List<Map<String, dynamic>>>(
+            future: _timelineFuture,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return LinearProgressIndicator(
+                  minHeight: 4,
+                  valueColor: const AlwaysStoppedAnimation(AppColors.accent),
+                  backgroundColor: Colors.white.withOpacity(0.08),
+                );
+              }
+
+              if (snapshot.hasError) {
+                return Text(
+                  'Failed to load timeline: ${snapshot.error}',
+                  style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                );
+              }
+
+              final docs = snapshot.data ?? const <Map<String, dynamic>>[];
+              final grouped = buildTreatedTimelineGroups(
+                docs,
+                maxDays: 3,
+                maxEntriesPerDay: 2,
+              );
+
+              if (grouped.isEmpty) {
+                return Text(
+                  'No completed treatments yet for this patient.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textMuted.withOpacity(0.9),
+                  ),
+                );
+              }
+
+              return Column(
+                children: List.generate(grouped.length, (index) {
+                  final dayGroup = grouped[index];
+                  final bottomSpacing =
+                      index == grouped.length - 1 ? 0.0 : 14.0;
+
+                  return Padding(
+                    padding: EdgeInsets.only(bottom: bottomSpacing),
+                    child: _TimelineDaySection(
+                      group: dayGroup,
+                      compact: true,
+                      showActions: false,
+                    ),
+                  );
+                }),
+              );
+            },
+          ),
           const SizedBox(height: 24),
           ElevatedButton.icon(
-            onPressed: () {
+            onPressed: () async {
               if (patientId == null) return;
-              showDialog(
+              await showDialog(
                 context: context,
                 barrierDismissible: true,
                 builder:
-                    (ctx) => _TreatmentTimelineDialog(patientId: patientId!),
+                    (ctx) => _TreatmentTimelineDialog(
+                      patientId: patientId,
+                      onChanged: _handleTreatmentsChanged,
+                    ),
               );
+              _refreshTimeline();
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.white.withOpacity(0.08),
@@ -849,7 +1117,7 @@ class _ScheduleCard extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
             ),
             icon: const Icon(Icons.timeline),
-            label: const Text('Treatment'),
+            label: const Text('Open full timeline'),
           ),
         ],
       ),
@@ -1555,10 +1823,17 @@ class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
       final items = withFallback.toList()..sort();
       setState(() {
         _types = items;
+        if (_selectedType == null && items.isNotEmpty) {
+          _selectedType = items.first;
+        }
       });
     } catch (e) {
       setState(() {
         _typesError = 'Failed to load types: $e';
+        _types = _fallbackTypes.toList()..sort();
+        if (_selectedType == null && _types.isNotEmpty) {
+          _selectedType = _types.first;
+        }
       });
     } finally {
       if (mounted) {
@@ -1580,7 +1855,14 @@ class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
   }
 
   Future<void> _save() async {
-    if (_selectedType == null || _selectedTeeth.isEmpty) return;
+    if (_selectedType == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select a treatment type first.')),
+      );
+      return;
+    }
+    if (_selectedTeeth.isEmpty) return;
     setState(() => _saving = true);
     try {
       await _treatmentStore.insert({
@@ -1777,12 +2059,7 @@ class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
         backgroundColor: Colors.white.withOpacity(0.08),
       );
     }
-    if (_typesError != null) {
-      return Text(
-        _typesError!,
-        style: const TextStyle(color: Colors.redAccent, fontSize: 12),
-      );
-    }
+    final warning = _typesError;
     if (_types.isEmpty) {
       return Text(
         'No treatment types found. Add new via database.',
@@ -1793,47 +2070,84 @@ class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
       );
     }
 
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children:
-          _types.map((type) {
-            final isSelected = _selectedType == type;
-            final color = _palette.colorFor(type);
-            return ChoiceChip(
-              label: Text(type),
-              selected: isSelected,
-              selectedColor: color,
-              backgroundColor: color.withOpacity(0.25),
-              labelStyle: TextStyle(
-                color: isSelected ? AppColors.bg : AppColors.textPrimary,
-              ),
-              onSelected: (_) {
-                setState(() {
-                  _selectedType = isSelected ? null : type;
-                });
-              },
-            );
-          }).toList(),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (warning != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              '$warning\nUsing fallback types.',
+              style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+            ),
+          ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children:
+              _types.map((type) {
+                final isSelected = _selectedType == type;
+                final color = _palette.colorFor(type);
+                return ChoiceChip(
+                  label: Text(type),
+                  selected: isSelected,
+                  selectedColor: color,
+                  backgroundColor: color.withOpacity(0.25),
+                  labelStyle: TextStyle(
+                    color: isSelected ? AppColors.bg : AppColors.textPrimary,
+                  ),
+                  onSelected: (_) {
+                    setState(() {
+                      _selectedType = isSelected ? null : type;
+                    });
+                  },
+                );
+              }).toList(),
+        ),
+      ],
     );
   }
 }
 
-class _TreatmentTimelineDialog extends StatelessWidget {
+class _TreatmentTimelineDialog extends StatefulWidget {
   final String patientId;
-  final TreatmentDataService _treatmentStore = TreatmentDataService();
+  final VoidCallback? onChanged;
 
-  _TreatmentTimelineDialog({Key? key, required this.patientId})
-    : super(key: key);
+  const _TreatmentTimelineDialog({
+    Key? key,
+    required this.patientId,
+    this.onChanged,
+  }) : super(key: key);
+
+  @override
+  State<_TreatmentTimelineDialog> createState() =>
+      _TreatmentTimelineDialogState();
+}
+
+class _TreatmentTimelineDialogState extends State<_TreatmentTimelineDialog> {
+  final TreatmentDataService _treatmentStore = TreatmentDataService();
+  late Stream<List<Map<String, dynamic>>> _query;
+
+  @override
+  void initState() {
+    super.initState();
+    _query = _buildQuery();
+  }
+
+  Stream<List<Map<String, dynamic>>> _buildQuery() {
+    return _treatmentStore.watchByPatient(widget.patientId, maxRows: 200);
+  }
+
+  void _refreshTimeline() {
+    if (!mounted) return;
+    setState(() {
+      _query = _buildQuery();
+    });
+    widget.onChanged?.call();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final query = _treatmentStore.watchAll().map(
-      (rows) => rows
-          .where((row) => _matchesPatient(row, patientId))
-          .toList(growable: false),
-    );
-
     return Dialog(
       backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
@@ -1887,7 +2201,7 @@ class _TreatmentTimelineDialog extends StatelessWidget {
                   const SizedBox(height: 12),
                   Expanded(
                     child: StreamBuilder<List<Map<String, dynamic>>>(
-                      stream: query,
+                      stream: _query,
                       builder: (context, snapshot) {
                         if (snapshot.connectionState ==
                             ConnectionState.waiting) {
@@ -1911,22 +2225,14 @@ class _TreatmentTimelineDialog extends StatelessWidget {
                           );
                         }
 
-                        final docs =
-                            (snapshot.data ?? <Map<String, dynamic>>[])
-                                .toList();
-                        docs.sort((a, b) {
-                          final ad = _asDate(b['date']);
-                          final bd = _asDate(a['date']);
-                          return ad.compareTo(bd); // latest first
-                        });
-                        if (docs.length > 200) {
-                          docs.removeRange(200, docs.length);
-                        }
+                        final docs = (snapshot.data ?? <Map<String, dynamic>>[])
+                            .toList(growable: false);
+                        final grouped = buildTreatedTimelineGroups(docs);
 
-                        if (docs.isEmpty) {
+                        if (grouped.isEmpty) {
                           return Center(
                             child: Text(
-                              'No treatments yet for this patient.',
+                              'No completed treatments yet for this patient.',
                               style: TextStyle(
                                 fontSize: 12,
                                 color: AppColors.textMuted.withOpacity(0.9),
@@ -1935,50 +2241,40 @@ class _TreatmentTimelineDialog extends StatelessWidget {
                           );
                         }
 
-                        return ListView.separated(
-                          itemCount: docs.length,
-                          separatorBuilder:
-                              (_, __) => const SizedBox(height: 10),
+                        return ListView.builder(
+                          itemCount: grouped.length,
                           itemBuilder: (context, index) {
-                            final data = docs[index];
-                            final treatmentId = data['id'];
-                            final type =
-                                (data['treatmentType'] ??
-                                        data['type'] ??
-                                        data['treatment_type'] ??
-                                        '')
-                                    .toString();
-                            final status = (data['status'] ?? '').toString();
-                            final date = _asDate(data['date']);
-                            final teeth = _asStringList(
-                              data['toothNumber'] ?? data['tooth_number'],
-                            );
-                            return _TimelineTile(
-                              date: _formatDate(date),
-                              title: type.isNotEmpty ? type : 'Treatment',
-                              meta: _composeMeta(status: status, teeth: teeth),
-                              highlight: index == 0,
-                              onDelete:
-                                  treatmentId == null
-                                      ? null
-                                      : () => _confirmAndDelete(
-                                        context,
-                                        treatmentId,
-                                      ),
-                              onEdit:
-                                  treatmentId == null
-                                      ? null
-                                      : () {
-                                        showDialog(
-                                          context: context,
-                                          barrierDismissible: true,
-                                          builder:
-                                              (_) => _EditTreatmentDialog(
-                                                treatmentId: treatmentId,
-                                                initialData: data,
-                                              ),
-                                        );
-                                      },
+                            final group = grouped[index];
+                            return Padding(
+                              padding: EdgeInsets.only(
+                                bottom: index == grouped.length - 1 ? 0 : 18,
+                              ),
+                              child: _TimelineDaySection(
+                                group: group,
+                                compact: false,
+                                showActions: true,
+                                onDelete: (entry) {
+                                  final treatmentId = entry.id;
+                                  if (treatmentId == null) return;
+                                  _confirmAndDelete(context, treatmentId);
+                                },
+                                onEdit: (entry) async {
+                                  final treatmentId = entry.id;
+                                  if (treatmentId == null) return;
+                                  final updated = await showDialog<bool>(
+                                    context: context,
+                                    barrierDismissible: true,
+                                    builder:
+                                        (_) => _EditTreatmentDialog(
+                                          treatmentId: treatmentId,
+                                          initialData: entry.source,
+                                        ),
+                                  );
+                                  if (updated == true) {
+                                    _refreshTimeline();
+                                  }
+                                },
+                              ),
                             );
                           },
                         );
@@ -1992,51 +2288,6 @@ class _TreatmentTimelineDialog extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  bool _matchesPatient(Map<String, dynamic> data, String patientId) {
-    final raw = data['patient_id'];
-    final resolved = raw?.toString().trim();
-    return resolved != null && resolved == patientId;
-  }
-
-  static DateTime _asDate(dynamic raw) {
-    if (raw is DateTime) return raw;
-    if (raw is String) {
-      final parsed = DateTime.tryParse(raw);
-      if (parsed != null) return parsed;
-    }
-    if (raw is num) {
-      return DateTime.fromMillisecondsSinceEpoch(raw.toInt());
-    }
-    return DateTime.fromMillisecondsSinceEpoch(0);
-  }
-
-  static List<String> _asStringList(dynamic raw) {
-    if (raw is Iterable) {
-      return raw
-          .map((e) => e?.toString() ?? '')
-          .where((s) => s.isNotEmpty)
-          .toList();
-    }
-    if (raw == null) return const [];
-    final s = raw.toString();
-    return s.isEmpty ? const [] : [s];
-  }
-
-  static String _formatDate(DateTime dt) {
-    String two(int v) => v < 10 ? '0$v' : '$v';
-    return '${dt.year}-${two(dt.month)}-${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
-  }
-
-  static String _composeMeta({
-    required String status,
-    required List<String> teeth,
-  }) {
-    final parts = <String>[];
-    if (teeth.isNotEmpty) parts.add('Teeth: ${teeth.join(', ')}');
-    if (status.isNotEmpty) parts.add('Status: $status');
-    return parts.isEmpty ? '' : parts.join(' • ');
   }
 
   Future<void> _confirmAndDelete(
@@ -2075,13 +2326,17 @@ class _TreatmentTimelineDialog extends StatelessWidget {
     );
 
     if (confirmed != true) return;
+    if (!context.mounted) return;
     try {
       await _treatmentStore.deleteById(treatmentId);
+      _refreshTimeline();
+      if (!context.mounted) return;
       // Feedback
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Deleted treatment')));
     } catch (e) {
+      if (!context.mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
@@ -2133,6 +2388,7 @@ class _EditTreatmentDialogState extends State<_EditTreatmentDialog> {
   final Set<String> _selectedTeeth = {};
   String? _selectedType;
   String _selectedStatus = 'treated';
+  DateTime _selectedDateTime = DateTime.now();
 
   @override
   void initState() {
@@ -2146,6 +2402,10 @@ class _EditTreatmentDialogState extends State<_EditTreatmentDialog> {
     _selectedType =
         (data['treatmentType'] ?? data['type'] ?? data['treatment_type'])
             ?.toString();
+    final parsedDate = parseTimelineDate(data['date']);
+    if (parsedDate != null) {
+      _selectedDateTime = parsedDate.toLocal();
+    }
     final teeth = _parseTeeth(data['toothNumber'] ?? data['tooth_number']);
     _selectedTeeth.addAll(teeth);
     final status = data['status']?.toString();
@@ -2163,9 +2423,20 @@ class _EditTreatmentDialogState extends State<_EditTreatmentDialog> {
       // Try global and patient-scoped types
       final set = await _repo.loadTreatmentTypes();
       final items = {...set, ..._fallbackTypes}.toList()..sort();
-      setState(() => _types = items);
+      setState(() {
+        _types = items;
+        if (_selectedType == null && items.isNotEmpty) {
+          _selectedType = items.first;
+        }
+      });
     } catch (e) {
-      setState(() => _typesError = 'Failed to load types: $e');
+      setState(() {
+        _typesError = 'Failed to load types: $e';
+        _types = _fallbackTypes.toList()..sort();
+        if (_selectedType == null && _types.isNotEmpty) {
+          _selectedType = _types.first;
+        }
+      });
     } finally {
       if (mounted) setState(() => _typesLoading = false);
     }
@@ -2193,14 +2464,61 @@ class _EditTreatmentDialogState extends State<_EditTreatmentDialog> {
     });
   }
 
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDateTime,
+      firstDate: DateTime(now.year - 15),
+      lastDate: DateTime(now.year + 15),
+      helpText: 'Select treatment date',
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _selectedDateTime = DateTime(
+        picked.year,
+        picked.month,
+        picked.day,
+        _selectedDateTime.hour,
+        _selectedDateTime.minute,
+      );
+    });
+  }
+
+  Future<void> _pickTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(_selectedDateTime),
+      helpText: 'Select treatment time',
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _selectedDateTime = DateTime(
+        _selectedDateTime.year,
+        _selectedDateTime.month,
+        _selectedDateTime.day,
+        picked.hour,
+        picked.minute,
+      );
+    });
+  }
+
   Future<void> _save() async {
-    if (_selectedType == null || _selectedTeeth.isEmpty) return;
+    if (_selectedType == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select a treatment type first.')),
+      );
+      return;
+    }
+    if (_selectedTeeth.isEmpty) return;
     setState(() => _loading = true);
     try {
       await _treatmentStore.updateById(widget.treatmentId, {
         'treatment_type': _selectedType,
         'tooth_number': _selectedTeeth.toList()..sort(),
         'status': _selectedStatus,
+        'date': _selectedDateTime.toUtc().toIso8601String(),
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       });
       if (!mounted) return;
@@ -2273,6 +2591,8 @@ class _EditTreatmentDialogState extends State<_EditTreatmentDialog> {
                   _buildTypeSelector(),
                   const SizedBox(height: 12),
                   _buildStatusSelector(),
+                  const SizedBox(height: 12),
+                  _buildDateTimeSelector(),
                   const SizedBox(height: 16),
                   SizedBox(
                     height: 520,
@@ -2385,12 +2705,7 @@ class _EditTreatmentDialogState extends State<_EditTreatmentDialog> {
         backgroundColor: Colors.white.withOpacity(0.08),
       );
     }
-    if (_typesError != null) {
-      return Text(
-        _typesError!,
-        style: const TextStyle(color: Colors.redAccent, fontSize: 12),
-      );
-    }
+    final warning = _typesError;
     if (_types.isEmpty) {
       return Text(
         'No treatment types found. Add new via database.',
@@ -2401,28 +2716,41 @@ class _EditTreatmentDialogState extends State<_EditTreatmentDialog> {
       );
     }
 
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children:
-          _types.map((type) {
-            final isSelected = _selectedType == type;
-            final color = _palette.colorFor(type);
-            return ChoiceChip(
-              label: Text(type),
-              selected: isSelected,
-              selectedColor: color,
-              backgroundColor: color.withOpacity(0.25),
-              labelStyle: TextStyle(
-                color: isSelected ? AppColors.bg : AppColors.textPrimary,
-              ),
-              onSelected: (_) {
-                setState(() {
-                  _selectedType = isSelected ? null : type;
-                });
-              },
-            );
-          }).toList(),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (warning != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              '$warning\nUsing fallback types.',
+              style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+            ),
+          ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children:
+              _types.map((type) {
+                final isSelected = _selectedType == type;
+                final color = _palette.colorFor(type);
+                return ChoiceChip(
+                  label: Text(type),
+                  selected: isSelected,
+                  selectedColor: color,
+                  backgroundColor: color.withOpacity(0.25),
+                  labelStyle: TextStyle(
+                    color: isSelected ? AppColors.bg : AppColors.textPrimary,
+                  ),
+                  onSelected: (_) {
+                    setState(() {
+                      _selectedType = isSelected ? null : type;
+                    });
+                  },
+                );
+              }).toList(),
+        ),
+      ],
     );
   }
 
@@ -2446,205 +2774,341 @@ class _EditTreatmentDialogState extends State<_EditTreatmentDialog> {
           }).toList(),
     );
   }
+
+  Widget _buildDateTimeSelector() {
+    final dateLabel = formatTimelineDateTimeLabel(_selectedDateTime);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.12)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              'Date: $dateLabel',
+              style: TextStyle(
+                fontSize: 12,
+                color: AppColors.textMuted.withOpacity(0.95),
+              ),
+            ),
+          ),
+          TextButton.icon(
+            onPressed: _loading ? null : _pickDate,
+            icon: const Icon(Icons.calendar_today_outlined, size: 16),
+            label: const Text('Date'),
+          ),
+          const SizedBox(width: 4),
+          TextButton.icon(
+            onPressed: _loading ? null : _pickTime,
+            icon: const Icon(Icons.access_time_rounded, size: 16),
+            label: const Text('Time'),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-class _TimelineTile extends StatelessWidget {
-  final String date;
-  final String title;
-  final String meta;
-  final bool highlight;
-  final VoidCallback? onDelete;
-  final VoidCallback? onEdit;
+class _TimelineDaySection extends StatelessWidget {
+  final TimelineDayGroupVm group;
+  final bool compact;
+  final bool showActions;
+  final ValueChanged<TimelineEntryVm>? onDelete;
+  final ValueChanged<TimelineEntryVm>? onEdit;
 
-  const _TimelineTile({
-    Key? key,
-    required this.date,
-    required this.title,
-    required this.meta,
-    this.highlight = false,
+  const _TimelineDaySection({
+    required this.group,
+    required this.compact,
+    required this.showActions,
     this.onDelete,
     this.onEdit,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
-    final lineColor = Colors.white.withOpacity(0.1);
-    return Row(
+    final dayLabel = formatTimelineDayLabel(group.day);
+    final itemCount = group.totalEntries;
+
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Column(
+        Row(
           children: [
             Container(
-              width: 12,
-              height: 12,
               decoration: BoxDecoration(
-                color: highlight ? AppColors.accentStrong : AppColors.accent,
-                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  colors: [
+                    AppColors.accent.withOpacity(0.9),
+                    AppColors.accentStrong.withOpacity(0.95),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(10),
                 boxShadow: [
-                  if (highlight)
-                    BoxShadow(
-                      color: AppColors.accentStrong.withOpacity(0.5),
-                      blurRadius: 12,
-                      spreadRadius: 3,
-                    ),
+                  BoxShadow(
+                    color: AppColors.accentStrong.withOpacity(0.28),
+                    blurRadius: 12,
+                    spreadRadius: 2,
+                  ),
                 ],
               ),
-            ),
-            Container(
-              width: 2,
-              height: 54,
-              margin: const EdgeInsets.only(top: 4),
-              color: lineColor,
-            ),
-          ],
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: buildSurfaceCardDecoration(glow: highlight),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        title,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      date,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textMuted.withOpacity(0.9),
-                      ),
-                    ),
-                    if (onEdit != null) ...[
-                      const SizedBox(width: 6),
-                      IconButton(
-                        tooltip: 'Edit',
-                        onPressed: onEdit,
-                        icon: const Icon(Icons.edit_outlined, size: 18),
-                        color: AppColors.accent,
-                      ),
-                    ],
-                    if (onDelete != null) ...[
-                      const SizedBox(width: 6),
-                      IconButton(
-                        tooltip: 'Delete',
-                        onPressed: onDelete,
-                        icon: const Icon(Icons.delete_outline, size: 18),
-                        color: Colors.redAccent.withOpacity(0.9),
-                      ),
-                    ],
-                  ],
-                ),
-                if (meta.isNotEmpty) ...[
-                  const SizedBox(height: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
                   Text(
-                    meta,
+                    dayLabel,
                     style: TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textMuted.withOpacity(0.95),
+                      fontSize: compact ? 12 : 13,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.bg,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 1,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.22),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '$itemCount',
+                      style: TextStyle(
+                        fontSize: compact ? 10 : 11,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.bg,
+                      ),
                     ),
                   ),
                 ],
-              ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Container(
+                height: 1,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      AppColors.accent.withOpacity(0.25),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Container(
+          margin: const EdgeInsets.only(left: 10),
+          padding: const EdgeInsets.only(left: 16),
+          decoration: BoxDecoration(
+            border: Border(
+              left: BorderSide(
+                color: AppColors.accent.withOpacity(0.16),
+                width: 2,
+              ),
             ),
           ),
+          child: Column(
+            children: List.generate(group.entries.length, (index) {
+              final entry = group.entries[index];
+              final bottomSpacing =
+                  index == group.entries.length - 1 ? 0.0 : 9.0;
+              return Padding(
+                padding: EdgeInsets.only(bottom: bottomSpacing),
+                child: _TimelineEntryCard(
+                  entry: entry,
+                  compact: compact,
+                  showActions: showActions,
+                  onDelete: onDelete == null ? null : () => onDelete!(entry),
+                  onEdit: onEdit == null ? null : () => onEdit!(entry),
+                ),
+              );
+            }),
+          ),
         ),
+        if (compact && group.hiddenEntries > 0) ...[
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.only(left: 30),
+            child: Text(
+              '+${group.hiddenEntries} more completed treatments',
+              style: TextStyle(
+                fontSize: 11,
+                color: AppColors.textMuted.withOpacity(0.85),
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }
 }
 
-class _AppointmentRow extends StatelessWidget {
-  final String date;
-  final String title;
-  final String meta;
-  final bool highlight;
+class _TimelineEntryCard extends StatelessWidget {
+  final TimelineEntryVm entry;
+  final bool compact;
+  final bool showActions;
+  final VoidCallback? onDelete;
+  final VoidCallback? onEdit;
 
-  const _AppointmentRow({
-    Key? key,
-    required this.date,
-    required this.title,
-    required this.meta,
-    this.highlight = false,
-  }) : super(key: key);
+  const _TimelineEntryCard({
+    required this.entry,
+    required this.compact,
+    required this.showActions,
+    this.onDelete,
+    this.onEdit,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.all(16),
-      decoration: buildSurfaceCardDecoration(glow: highlight),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    final teethText = entry.teeth.isEmpty ? '—' : entry.teeth.join(', ');
+    final entriesSuffix =
+        entry.entriesCount > 1 ? ' • Entries: ${entry.entriesCount}' : '';
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Positioned(
+          left: -21,
+          top: compact ? 14 : 18,
+          child: Container(
+            width: 10,
+            height: 10,
             decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [AppColors.bgMid, AppColors.bg]),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withOpacity(0.2)),
-            ),
-            child: Text(
-              date,
-              style: const TextStyle(
-                fontWeight: FontWeight.w600,
-                color: AppColors.textPrimary,
-              ),
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  meta,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textMuted.withOpacity(0.9),
-                  ),
+              color: entry.badge.dotColor,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: entry.badge.dotColor.withOpacity(0.45),
+                  blurRadius: 8,
+                  spreadRadius: 1,
                 ),
               ],
             ),
           ),
-          if (highlight)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [AppColors.accentStrong, AppColors.accent],
-                ),
-                borderRadius: BorderRadius.circular(999),
+        ),
+        Container(
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 14 : 16,
+            vertical: compact ? 12 : 14,
+          ),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.03),
+            border: Border.all(color: Colors.white.withOpacity(0.08)),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                entry.title,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: compact ? 14 : 15,
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: entry.badge.backgroundColor,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                entry.badge.text,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: entry.badge.textColor,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          'Teeth: $teethText$entriesSuffix',
+                          style: TextStyle(
+                            fontSize: compact ? 11 : 12,
+                            color: AppColors.textMuted.withOpacity(0.92),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      if (entry.timeLabel != null)
+                        Text(
+                          entry.timeLabel!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textMuted.withOpacity(0.8),
+                          ),
+                        ),
+                      if (showActions &&
+                          entry.entriesCount == 1 &&
+                          (onEdit != null || onDelete != null))
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (onEdit != null)
+                              IconButton(
+                                tooltip: 'Edit',
+                                onPressed: onEdit,
+                                icon: const Icon(Icons.edit_outlined, size: 18),
+                                color: AppColors.accent,
+                                visualDensity: VisualDensity.compact,
+                              ),
+                            if (onDelete != null)
+                              IconButton(
+                                tooltip: 'Delete',
+                                onPressed: onDelete,
+                                icon: const Icon(
+                                  Icons.delete_outline,
+                                  size: 18,
+                                ),
+                                color: Colors.redAccent.withOpacity(0.9),
+                                visualDensity: VisualDensity.compact,
+                              ),
+                          ],
+                        ),
+                    ],
+                  ),
+                ],
               ),
-              child: const Text(
-                'High priority',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: AppColors.bg,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-        ],
-      ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
