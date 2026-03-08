@@ -1,5 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 
+import 'patient_payment_service.dart';
 import 'supabase_client.dart';
 import '../utils/patient_name_formatter.dart';
 
@@ -31,6 +32,7 @@ class WaitlistEntry {
   final String subtitle;
   final int? stageId;
   final int? order;
+  final DateTime? firstPaymentDate;
 
   const WaitlistEntry({
     required this.id,
@@ -38,6 +40,7 @@ class WaitlistEntry {
     required this.subtitle,
     required this.stageId,
     required this.order,
+    required this.firstPaymentDate,
   });
 }
 
@@ -81,7 +84,13 @@ WaitlistEntry waitlistEntryFromRow(Map<String, dynamic> data) {
     subtitle: subtitle.isNotEmpty ? subtitle : 'No contact details',
     stageId: assignment.stageId,
     order: assignment.order,
+    firstPaymentDate: firstPaymentDateFromData(data),
   );
+}
+
+DateTime? firstPaymentDateFromData(Map<String, dynamic>? data) {
+  if (data == null) return null;
+  return firstPaymentDateFromPayments(data['payments']);
 }
 
 int compareWaitlistEntries(WaitlistEntry a, WaitlistEntry b) {
@@ -94,6 +103,22 @@ int compareWaitlistEntries(WaitlistEntry a, WaitlistEntry b) {
   return a.id.compareTo(b.id);
 }
 
+int compareWaitlistEntriesByPaymentAgeDesc(WaitlistEntry a, WaitlistEntry b) {
+  final aPaymentDate = a.firstPaymentDate;
+  final bPaymentDate = b.firstPaymentDate;
+
+  if (aPaymentDate != null && bPaymentDate != null) {
+    final paymentCompare = aPaymentDate.compareTo(bPaymentDate);
+    if (paymentCompare != 0) return paymentCompare;
+  } else if (aPaymentDate != null) {
+    return -1;
+  } else if (bPaymentDate != null) {
+    return 1;
+  }
+
+  return compareWaitlistEntries(a, b);
+}
+
 List<WaitlistEntry> waitlistEntriesForStage(
   Iterable<Map<String, dynamic>> rows,
   int stageId,
@@ -103,7 +128,7 @@ List<WaitlistEntry> waitlistEntriesForStage(
           .map(waitlistEntryFromRow)
           .where((entry) => entry.stageId == stageId)
           .toList();
-  entries.sort(compareWaitlistEntries);
+  entries.sort(compareWaitlistEntriesByPaymentAgeDesc);
   return entries;
 }
 
@@ -189,7 +214,7 @@ class WaitlistService {
     return watchAllWaitlistEntries().map((entries) {
       final stageEntries =
           entries.where((entry) => entry.stageId == stageId).toList()
-            ..sort(compareWaitlistEntries);
+            ..sort(compareWaitlistEntriesByPaymentAgeDesc);
       if (stageEntries.length > 100) {
         return stageEntries.sublist(0, 100);
       }

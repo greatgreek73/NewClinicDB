@@ -27,5 +27,7 @@ void main() {
     expect(find.text('Patient overview'), findsOneWidget);
     expect(find.text('Add to waiting list'), findsOneWidget);
     expect(find.textContaining('Not on waiting list'), findsOneWidget);
+    expect(find.text('Payments'), findsOneWidget);
+    expect(find.text('Add payment'), findsOneWidget);
   });
 }

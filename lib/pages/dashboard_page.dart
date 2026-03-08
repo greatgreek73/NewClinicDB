@@ -572,10 +572,9 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
   }
 
   void _openWaitlistStage(WaitlistStageDefinition stage) {
-    showModalBottomSheet(
+    showDialog(
       context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
+      barrierDismissible: true,
       builder: (ctx) {
         return _WaitlistPatientsSheet(stage: stage, service: _waitlistService);
       },
@@ -982,7 +981,18 @@ class _WaitlistPatientsSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bottomPadding = MediaQuery.of(context).viewPadding.bottom;
+    void openPatientProfile(WaitlistEntry patient) {
+      final navigator = Navigator.of(context);
+      navigator.pop();
+      navigator.pushNamed(
+        PatientDetailsPage.routeName,
+        arguments: PatientDetailsArgs(
+          patientId: patient.id,
+          displayName: patient.title,
+        ),
+      );
+    }
+
     Future<void> runAction(
       Future<void> Function() action, {
       String? successMessage,
@@ -1003,399 +1013,624 @@ class _WaitlistPatientsSheet extends StatelessWidget {
       }
     }
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(16, 16, 16, bottomPadding + 16),
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [
-              AppColors.surfaceDark.withOpacity(0.98),
-              AppColors.surface.withOpacity(0.98),
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(color: Colors.white.withOpacity(0.12)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.55),
-              blurRadius: 50,
-              spreadRadius: 18,
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 900, minHeight: 320),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                AppColors.accent.withOpacity(0.35),
+                AppColors.accentStrong.withOpacity(0.45),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
-          ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 46,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(999),
+            borderRadius: BorderRadius.circular(22),
+          ),
+          padding: const EdgeInsets.all(2),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.surface.withOpacity(0.98),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withOpacity(0.12)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Text(
+                        'Waiting list',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(
+                          Icons.close,
+                          color: AppColors.textMuted,
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              FutureBuilder<WaitlistSchemaCapabilities>(
-                future: service.getCapabilities(),
-                builder: (context, capabilitiesSnapshot) {
-                  final capabilities = capabilitiesSnapshot.data;
-                  final supportsOrdering =
-                      capabilities?.supportsPersistentOrdering ?? true;
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: FutureBuilder<WaitlistSchemaCapabilities>(
+                      future: service.getCapabilities(),
+                      builder: (context, capabilitiesSnapshot) {
+                        final capabilities = capabilitiesSnapshot.data;
+                        final supportsOrdering =
+                            capabilities?.supportsPersistentOrdering ?? true;
 
-                  return StreamBuilder<List<WaitlistEntry>>(
-                    stream: service.watchPatientsInStage(stage.id),
-                    builder: (context, snapshot) {
-                      final patients = snapshot.data ?? const <WaitlistEntry>[];
-                      final isLoading =
-                          snapshot.connectionState == ConnectionState.waiting &&
-                          !snapshot.hasData;
+                        return StreamBuilder<List<WaitlistEntry>>(
+                          stream: service.watchPatientsInStage(stage.id),
+                          builder: (context, snapshot) {
+                            final patients =
+                                snapshot.data ?? const <WaitlistEntry>[];
+                            final isLoading =
+                                snapshot.connectionState ==
+                                    ConnectionState.waiting &&
+                                !snapshot.hasData;
 
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withOpacity(0.2),
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(
-                                    color: Colors.white.withOpacity(0.1),
-                                  ),
-                                ),
-                                child: Icon(stage.icon, color: stage.color),
-                              ),
-                              const SizedBox(width: 12),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    stage.title,
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w700,
-                                      color: AppColors.textPrimary,
-                                    ),
-                                  ),
-                                  Text(
-                                    'Queue for stage ${stage.id}',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: AppColors.textMuted.withOpacity(
-                                        0.85,
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(10),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withOpacity(0.2),
+                                        borderRadius: BorderRadius.circular(14),
+                                        border: Border.all(
+                                          color: Colors.white.withOpacity(0.1),
+                                        ),
+                                      ),
+                                      child: Icon(
+                                        stage.icon,
+                                        color: stage.color,
                                       ),
                                     ),
-                                  ),
-                                ],
-                              ),
-                              const Spacer(),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: stage.color.withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: stage.color.withOpacity(0.35),
-                                  ),
-                                ),
-                                child: Text(
-                                  '${patients.length}',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w700,
-                                    color: stage.color.withOpacity(0.9),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          if (capabilities?.needsWaitlistMigration ??
-                              false) ...[
-                            const SizedBox(height: 12),
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 10,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.05),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: Colors.white.withOpacity(0.08),
-                                ),
-                              ),
-                              child: Text(
-                                supportsOrdering
-                                    ? 'This project is still using the legacy waitlist field. Apply the Supabase migration to finish the schema update.'
-                                    : 'Queue order is read-only until the Supabase waitlist migration is applied.',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: AppColors.textMuted.withOpacity(0.9),
-                                ),
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 14),
-                          if (isLoading)
-                            LinearProgressIndicator(
-                              minHeight: 4,
-                              valueColor: AlwaysStoppedAnimation(stage.color),
-                              backgroundColor: Colors.white.withOpacity(0.08),
-                            )
-                          else if (patients.isEmpty)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              child: Text(
-                                'No patients are in this waiting list stage yet.',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: AppColors.textMuted.withOpacity(0.85),
-                                ),
-                              ),
-                            )
-                          else
-                            ConstrainedBox(
-                              constraints: const BoxConstraints(maxHeight: 420),
-                              child: ListView.separated(
-                                shrinkWrap: true,
-                                physics: const BouncingScrollPhysics(),
-                                itemBuilder: (context, index) {
-                                  final patient = patients[index];
-                                  final hasPrevStage = stage.id > 1;
-                                  final hasNextStage =
-                                      stage.id < waitlistStages.length;
-
-                                  return Container(
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.05),
-                                      borderRadius: BorderRadius.circular(14),
-                                      border: Border.all(
-                                        color: Colors.white.withOpacity(0.08),
-                                      ),
-                                    ),
-                                    child: Row(
+                                    const SizedBox(width: 12),
+                                    Column(
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
                                       children: [
-                                        CircleAvatar(
-                                          radius: 18,
-                                          backgroundColor: stage.color
-                                              .withOpacity(0.15),
-                                          child: Text(
-                                            '${patient.order ?? index + 1}',
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w700,
-                                              color: AppColors.textPrimary,
-                                            ),
+                                        Text(
+                                          stage.title,
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w700,
+                                            color: AppColors.textPrimary,
                                           ),
                                         ),
-                                        const SizedBox(width: 12),
-                                        Expanded(
-                                          child: GestureDetector(
-                                            onTap: () {
-                                              Navigator.of(context).pop();
-                                              Navigator.of(context).pushNamed(
-                                                PatientDetailsPage.routeName,
-                                                arguments: PatientDetailsArgs(
-                                                  patientId: patient.id,
-                                                  displayName: patient.title,
-                                                ),
-                                              );
-                                            },
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  patient.title,
-                                                  style: const TextStyle(
-                                                    fontSize: 14,
-                                                    fontWeight: FontWeight.w600,
-                                                    color:
-                                                        AppColors.textPrimary,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 4),
-                                                Text(
-                                                  'Queue #${patient.order ?? index + 1}',
-                                                  style: TextStyle(
-                                                    fontSize: 12,
-                                                    color: AppColors.textMuted
-                                                        .withOpacity(0.82),
-                                                  ),
-                                                ),
-                                                if (patient.subtitle.isNotEmpty)
-                                                  Padding(
-                                                    padding:
-                                                        const EdgeInsets.only(
-                                                          top: 4,
-                                                        ),
-                                                    child: Text(
-                                                      patient.subtitle,
-                                                      style: TextStyle(
-                                                        fontSize: 12,
-                                                        color: AppColors
-                                                            .textMuted
-                                                            .withOpacity(0.85),
-                                                      ),
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            IconButton(
-                                              tooltip: 'Move up',
-                                              visualDensity:
-                                                  VisualDensity.compact,
-                                              onPressed:
-                                                  !supportsOrdering ||
-                                                          index == 0
-                                                      ? null
-                                                      : () => runAction(
-                                                        () => service
-                                                            .movePatientUp(
-                                                              patient.id,
-                                                            ),
-                                                      ),
-                                              icon: const Icon(
-                                                Icons.keyboard_arrow_up_rounded,
-                                                size: 20,
-                                              ),
-                                              color: AppColors.textPrimary,
-                                            ),
-                                            IconButton(
-                                              tooltip: 'Move down',
-                                              visualDensity:
-                                                  VisualDensity.compact,
-                                              onPressed:
-                                                  !supportsOrdering ||
-                                                          index ==
-                                                              patients.length -
-                                                                  1
-                                                      ? null
-                                                      : () => runAction(
-                                                        () => service
-                                                            .movePatientDown(
-                                                              patient.id,
-                                                            ),
-                                                      ),
-                                              icon: const Icon(
-                                                Icons
-                                                    .keyboard_arrow_down_rounded,
-                                                size: 20,
-                                              ),
-                                              color: AppColors.textPrimary,
-                                            ),
-                                          ],
-                                        ),
-                                        Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            IconButton(
-                                              tooltip: 'Move to previous stage',
-                                              visualDensity:
-                                                  VisualDensity.compact,
-                                              onPressed:
-                                                  !hasPrevStage
-                                                      ? null
-                                                      : () => runAction(
-                                                        () => service
-                                                            .movePatientToStage(
-                                                              patient.id,
-                                                              stage.id - 1,
-                                                            ),
-                                                        successMessage:
-                                                            'Moved ${patient.title} to ${waitlistStageById(stage.id - 1)?.title ?? 'stage ${stage.id - 1}'}.',
-                                                      ),
-                                              icon: const Icon(
-                                                Icons
-                                                    .arrow_back_ios_new_rounded,
-                                                size: 16,
-                                              ),
-                                              color: AppColors.textPrimary,
-                                            ),
-                                            IconButton(
-                                              tooltip: 'Move to next stage',
-                                              visualDensity:
-                                                  VisualDensity.compact,
-                                              onPressed:
-                                                  !hasNextStage
-                                                      ? null
-                                                      : () => runAction(
-                                                        () => service
-                                                            .movePatientToStage(
-                                                              patient.id,
-                                                              stage.id + 1,
-                                                            ),
-                                                        successMessage:
-                                                            'Moved ${patient.title} to ${waitlistStageById(stage.id + 1)?.title ?? 'stage ${stage.id + 1}'}.',
-                                                      ),
-                                              icon: const Icon(
-                                                Icons.arrow_forward_ios_rounded,
-                                                size: 16,
-                                              ),
-                                              color: AppColors.textPrimary,
-                                            ),
-                                          ],
-                                        ),
-                                        IconButton(
-                                          tooltip: 'Remove from waiting list',
-                                          visualDensity: VisualDensity.compact,
-                                          onPressed:
-                                              () => runAction(
-                                                () =>
-                                                    service.removeFromWaitlist(
-                                                      patient.id,
-                                                    ),
-                                                successMessage:
-                                                    'Removed ${patient.title} from waiting list.',
-                                              ),
-                                          icon: const Icon(
-                                            Icons.close_rounded,
-                                            size: 18,
-                                          ),
-                                          color: Colors.redAccent.withOpacity(
-                                            0.9,
+                                        Text(
+                                          'Queue for stage ${stage.id}',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: AppColors.textMuted
+                                                .withOpacity(0.85),
                                           ),
                                         ),
                                       ],
                                     ),
-                                  );
-                                },
-                                separatorBuilder:
-                                    (_, __) => const SizedBox(height: 10),
-                                itemCount: patients.length,
-                              ),
-                            ),
-                        ],
-                      );
-                    },
-                  );
-                },
+                                    const Spacer(),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 6,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: stage.color.withOpacity(0.15),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: stage.color.withOpacity(0.35),
+                                        ),
+                                      ),
+                                      child: Text(
+                                        '${patients.length}',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700,
+                                          color: stage.color.withOpacity(0.9),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                if (capabilities?.needsWaitlistMigration ??
+                                    false) ...[
+                                  const SizedBox(height: 12),
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 10,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.05),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: Colors.white.withOpacity(0.08),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      supportsOrdering
+                                          ? 'This project is still using the legacy waitlist field. Apply the Supabase migration to finish the schema update.'
+                                          : 'Queue order is read-only until the Supabase waitlist migration is applied.',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: AppColors.textMuted.withOpacity(
+                                          0.9,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 12),
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: stage.color.withOpacity(0.08),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: stage.color.withOpacity(0.18),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    'Patients are sorted by days since first payment, from longest-waiting to newest.',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: AppColors.textMuted.withOpacity(
+                                        0.92,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                                Expanded(
+                                  child:
+                                      isLoading
+                                          ? Align(
+                                            alignment: Alignment.topCenter,
+                                            child: LinearProgressIndicator(
+                                              minHeight: 4,
+                                              valueColor:
+                                                  AlwaysStoppedAnimation(
+                                                    stage.color,
+                                                  ),
+                                              backgroundColor: Colors.white
+                                                  .withOpacity(0.08),
+                                            ),
+                                          )
+                                          : patients.isEmpty
+                                          ? Center(
+                                            child: Text(
+                                              'No patients are in this waiting list stage yet.',
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                color: AppColors.textMuted
+                                                    .withOpacity(0.85),
+                                              ),
+                                            ),
+                                          )
+                                          : ListView.separated(
+                                            physics:
+                                                const BouncingScrollPhysics(),
+                                            itemBuilder: (context, index) {
+                                              final patient = patients[index];
+                                              final hasPrevStage = stage.id > 1;
+                                              final hasNextStage =
+                                                  stage.id <
+                                                  waitlistStages.length;
+
+                                              return _WaitlistPatientTile(
+                                                accentColor: stage.color,
+                                                queueNumber: index + 1,
+                                                title: patient.title,
+                                                subtitle: patient.subtitle,
+                                                firstPaymentDate:
+                                                    patient.firstPaymentDate,
+                                                onOpenPatient:
+                                                    () => openPatientProfile(
+                                                      patient,
+                                                    ),
+                                                onMoveUp: null,
+                                                onMoveDown: null,
+                                                onMovePrevStage:
+                                                    !hasPrevStage
+                                                        ? null
+                                                        : () => runAction(
+                                                          () => service
+                                                              .movePatientToStage(
+                                                                patient.id,
+                                                                stage.id - 1,
+                                                              ),
+                                                          successMessage:
+                                                              'Moved ${patient.title} to ${waitlistStageById(stage.id - 1)?.title ?? 'stage ${stage.id - 1}'}.',
+                                                        ),
+                                                onMoveNextStage:
+                                                    !hasNextStage
+                                                        ? null
+                                                        : () => runAction(
+                                                          () => service
+                                                              .movePatientToStage(
+                                                                patient.id,
+                                                                stage.id + 1,
+                                                              ),
+                                                          successMessage:
+                                                              'Moved ${patient.title} to ${waitlistStageById(stage.id + 1)?.title ?? 'stage ${stage.id + 1}'}.',
+                                                        ),
+                                                onRemove:
+                                                    () => runAction(
+                                                      () => service
+                                                          .removeFromWaitlist(
+                                                            patient.id,
+                                                          ),
+                                                      successMessage:
+                                                          'Removed ${patient.title} from waiting list.',
+                                                    ),
+                                              );
+                                            },
+                                            separatorBuilder:
+                                                (_, __) =>
+                                                    const SizedBox(height: 10),
+                                            itemCount: patients.length,
+                                          ),
+                                ),
+                              ],
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
     );
   }
+}
+
+class _WaitlistPatientTile extends StatefulWidget {
+  final Color accentColor;
+  final int queueNumber;
+  final String title;
+  final String subtitle;
+  final DateTime? firstPaymentDate;
+  final VoidCallback onOpenPatient;
+  final VoidCallback? onMoveUp;
+  final VoidCallback? onMoveDown;
+  final VoidCallback? onMovePrevStage;
+  final VoidCallback? onMoveNextStage;
+  final VoidCallback onRemove;
+
+  const _WaitlistPatientTile({
+    required this.accentColor,
+    required this.queueNumber,
+    required this.title,
+    required this.subtitle,
+    required this.firstPaymentDate,
+    required this.onOpenPatient,
+    required this.onMoveUp,
+    required this.onMoveDown,
+    required this.onMovePrevStage,
+    required this.onMoveNextStage,
+    required this.onRemove,
+  });
+
+  @override
+  State<_WaitlistPatientTile> createState() => _WaitlistPatientTileState();
+}
+
+class _WaitlistPatientTileState extends State<_WaitlistPatientTile> {
+  bool _isPulsing = false;
+  bool _isBusy = false;
+
+  Future<void> _handleOpenPatient() async {
+    if (_isBusy) return;
+
+    setState(() {
+      _isBusy = true;
+      _isPulsing = true;
+    });
+
+    await Future<void>.delayed(const Duration(milliseconds: 140));
+    if (!mounted) return;
+
+    widget.onOpenPatient();
+
+    if (!mounted) return;
+    await Future<void>.delayed(const Duration(milliseconds: 180));
+    if (!mounted) return;
+
+    setState(() {
+      _isBusy = false;
+      _isPulsing = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color:
+            _isPulsing
+                ? widget.accentColor.withOpacity(0.08)
+                : Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color:
+              _isPulsing
+                  ? widget.accentColor.withOpacity(0.46)
+                  : Colors.white.withOpacity(0.08),
+        ),
+        boxShadow:
+            _isPulsing
+                ? [
+                  BoxShadow(
+                    color: widget.accentColor.withOpacity(0.28),
+                    blurRadius: 22,
+                    spreadRadius: 2,
+                  ),
+                ]
+                : const [],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: widget.accentColor.withOpacity(0.15),
+            child: Text(
+              '${widget.queueNumber}',
+              style: const TextStyle(
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _WaitlistPatientInfoButton(
+              accentColor: widget.accentColor,
+              title: widget.title,
+              queueLabel: 'Queue #${widget.queueNumber}',
+              subtitle: widget.subtitle,
+              firstPaymentDate: widget.firstPaymentDate,
+              onTap: _handleOpenPatient,
+            ),
+          ),
+          if (widget.onMoveUp != null || widget.onMoveDown != null) ...[
+            const SizedBox(width: 8),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: 'Move up',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: widget.onMoveUp,
+                  icon: const Icon(Icons.keyboard_arrow_up_rounded, size: 20),
+                  color: AppColors.textPrimary,
+                ),
+                IconButton(
+                  tooltip: 'Move down',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: widget.onMoveDown,
+                  icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 20),
+                  color: AppColors.textPrimary,
+                ),
+              ],
+            ),
+          ],
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: 'Move to previous stage',
+                visualDensity: VisualDensity.compact,
+                onPressed: widget.onMovePrevStage,
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 16),
+                color: AppColors.textPrimary,
+              ),
+              IconButton(
+                tooltip: 'Move to next stage',
+                visualDensity: VisualDensity.compact,
+                onPressed: widget.onMoveNextStage,
+                icon: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+                color: AppColors.textPrimary,
+              ),
+            ],
+          ),
+          IconButton(
+            tooltip: 'Remove from waiting list',
+            visualDensity: VisualDensity.compact,
+            onPressed: widget.onRemove,
+            icon: const Icon(Icons.close_rounded, size: 18),
+            color: Colors.redAccent.withOpacity(0.9),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WaitlistPatientInfoButton extends StatelessWidget {
+  final Color accentColor;
+  final String title;
+  final String queueLabel;
+  final String subtitle;
+  final DateTime? firstPaymentDate;
+  final VoidCallback onTap;
+
+  const _WaitlistPatientInfoButton({
+    required this.accentColor,
+    required this.title,
+    required this.queueLabel,
+    required this.subtitle,
+    required this.firstPaymentDate,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final paymentBadge = _paymentAgeBadgeData(firstPaymentDate);
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                ),
+                if (paymentBadge != null) ...[
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: paymentBadge.backgroundColor,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: paymentBadge.borderColor),
+                      boxShadow: [
+                        BoxShadow(
+                          color: accentColor.withOpacity(0.08),
+                          blurRadius: 12,
+                          spreadRadius: 0,
+                        ),
+                      ],
+                    ),
+                    child: Text(
+                      paymentBadge.label,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: paymentBadge.textColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            if (paymentBadge != null) const SizedBox(height: 6),
+            Text(
+              queueLabel,
+              style: TextStyle(
+                fontSize: 12,
+                color: AppColors.textMuted.withOpacity(0.82),
+              ),
+            ),
+            if (subtitle.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  subtitle,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textMuted.withOpacity(0.85),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+_PaymentAgeBadgeData? _paymentAgeBadgeData(DateTime? firstPaymentDate) {
+  final days = _daysSinceFirstPayment(firstPaymentDate);
+  if (days == null) return null;
+
+  if (days >= 8) {
+    return _PaymentAgeBadgeData(
+      label: 'Paid ${days}d ago',
+      backgroundColor: const Color(0x26FF6B6B),
+      borderColor: const Color(0x66FF6B6B),
+      textColor: const Color(0xFFFFB3B3),
+    );
+  }
+
+  if (days >= 3) {
+    return _PaymentAgeBadgeData(
+      label: 'Paid ${days}d ago',
+      backgroundColor: const Color(0x26FFB347),
+      borderColor: const Color(0x66FFB347),
+      textColor: const Color(0xFFFFD59A),
+    );
+  }
+
+  return _PaymentAgeBadgeData(
+    label: 'Paid ${days}d ago',
+    backgroundColor: Colors.white.withOpacity(0.05),
+    borderColor: Colors.white.withOpacity(0.10),
+    textColor: AppColors.textMuted.withOpacity(0.95),
+  );
+}
+
+int? _daysSinceFirstPayment(DateTime? firstPaymentDate, {DateTime? now}) {
+  if (firstPaymentDate == null) return null;
+
+  final localNow = (now ?? DateTime.now()).toLocal();
+  final localPaymentDate = firstPaymentDate.toLocal();
+  final startOfToday = DateTime(localNow.year, localNow.month, localNow.day);
+  final startOfPaymentDay = DateTime(
+    localPaymentDate.year,
+    localPaymentDate.month,
+    localPaymentDate.day,
+  );
+
+  final difference = startOfToday.difference(startOfPaymentDay).inDays;
+  return difference < 0 ? 0 : difference;
+}
+
+class _PaymentAgeBadgeData {
+  final String label;
+  final Color backgroundColor;
+  final Color borderColor;
+  final Color textColor;
+
+  const _PaymentAgeBadgeData({
+    required this.label,
+    required this.backgroundColor,
+    required this.borderColor,
+    required this.textColor,
+  });
 }

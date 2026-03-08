@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_colors.dart';
+
 class TimelineStatusBadgeVm {
   final String text;
   final Color backgroundColor;
@@ -153,7 +155,7 @@ TimelineStatusBadgeVm resolveTimelineStatusBadge(String status) {
         text: 'Completed',
         backgroundColor: Color(0x338ABA8A),
         textColor: Color(0xFF8ABA8A),
-        dotColor: Color(0xFF8ABA8A),
+        dotColor: AppColors.accent,
       );
     case 'inprogress':
       return const TimelineStatusBadgeVm(

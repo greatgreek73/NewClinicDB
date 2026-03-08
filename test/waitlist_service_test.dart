@@ -20,7 +20,7 @@ void main() {
       expect(assignment.order, isNull);
     });
 
-    test('builds sorted stage entries by queue order', () {
+    test('falls back to queue order when payment age is unavailable', () {
       final entries = waitlistEntriesForStage([
         {
           'id': 'b',
@@ -46,6 +46,72 @@ void main() {
       ], 1);
 
       expect(entries.map((entry) => entry.id), ['a', 'b']);
+    });
+
+    test('sorts stage entries by longest days since first payment first', () {
+      final entries = waitlistEntriesForStage([
+        {
+          'id': 'newer',
+          'name': 'Newer',
+          'surname': 'Patient',
+          'waitlist_stage': 1,
+          'waitlist_order': 1,
+          'payments': [
+            {'date': '2025-06-20T09:00:00Z', 'amount': 1000},
+          ],
+        },
+        {
+          'id': 'older',
+          'name': 'Older',
+          'surname': 'Patient',
+          'waitlist_stage': 1,
+          'waitlist_order': 3,
+          'payments': [
+            {'date': '2025-06-01T09:00:00Z', 'amount': 1000},
+          ],
+        },
+        {
+          'id': 'no-payment',
+          'name': 'No',
+          'surname': 'Payment',
+          'waitlist_stage': 1,
+          'waitlist_order': 2,
+        },
+      ], 1);
+
+      expect(entries.map((entry) => entry.id), [
+        'older',
+        'newer',
+        'no-payment',
+      ]);
+    });
+
+    test('extracts earliest first payment date from unsorted payments', () {
+      final firstPayment = firstPaymentDateFromData({
+        'payments': [
+          {'date': '2025-08-13T21:00:00Z', 'amount': 200000},
+          {'date': '2025-06-04T21:00:00Z', 'amount': 100000},
+          {'date': '2025-06-30T21:00:00Z', 'amount': 100000},
+        ],
+      });
+
+      expect(firstPayment, DateTime.parse('2025-06-04T21:00:00Z'));
+    });
+
+    test('stores first payment date in waitlist entry', () {
+      final entry = waitlistEntryFromRow({
+        'id': 'a',
+        'name': 'Alice',
+        'surname': 'Alpha',
+        'waitlist_stage': 1,
+        'waitlist_order': 1,
+        'payments': [
+          {'date': '2025-03-10T09:00:00Z', 'amount': 50000},
+          {'date': '2025-02-10T09:00:00Z', 'amount': 50000},
+        ],
+      });
+
+      expect(entry.firstPaymentDate, DateTime.parse('2025-02-10T09:00:00Z'));
     });
   });
 

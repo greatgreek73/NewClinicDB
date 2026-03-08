@@ -5,6 +5,7 @@ import '../models/tooth_condition.dart';
 import '../models/treatment_palette.dart';
 import '../services/dental_chart_repository.dart';
 import '../services/id_generator.dart';
+import '../services/patient_payment_service.dart';
 import '../services/supabase_client.dart';
 import '../services/treatment_data_service.dart';
 import '../services/waitlist_service.dart';
@@ -55,6 +56,7 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
   final TreatmentPalette _treatmentPalette = TreatmentPalette();
   String? _selectedTreatmentType;
   bool _isSavingWaitlist = false;
+  bool _isSavingPayments = false;
 
   @override
   void initState() {
@@ -94,6 +96,7 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
             snapshot.connectionState == ConnectionState.waiting;
         final initialWaitlist = waitlistAssignmentFromData(data);
         final paymentStats = _computePaymentStats(data);
+        final payments = parsePatientPayments(data?['payments']);
 
         return LayoutBuilder(
           builder: (context, constraints) {
@@ -111,6 +114,22 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
               onRemoveFromWaitlist: _handleRemoveFromWaitlist,
               totalCostText: _formatMoney(paymentStats.totalCost),
               paidTotalText: _formatMoney(paymentStats.totalPaid),
+              payments: payments,
+              isSavingPayments: _isSavingPayments,
+              onAddPayment:
+                  patientId == null
+                      ? null
+                      : () => _handleAddPayment(patientId, data),
+              onEditPayment:
+                  patientId == null
+                      ? null
+                      : (payment) =>
+                          _handleEditPayment(patientId, data, payment),
+              onDeletePayment:
+                  patientId == null
+                      ? null
+                      : (payment) =>
+                          _handleDeletePayment(patientId, data, payment),
             );
 
             final scheduleCard = _ScheduleCard(
@@ -343,6 +362,154 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
     }
   }
 
+  Future<void> _handleAddPayment(
+    String patientId,
+    Map<String, dynamic>? data,
+  ) async {
+    if (_isSavingPayments) return;
+
+    final draft = await showDialog<_PaymentDraft>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => const _EditPaymentDialog(),
+    );
+    if (draft == null) return;
+
+    await _savePayments(
+      patientId,
+      data,
+      (payments) => payments..add(draft.toPayload()),
+      successMessage: 'Payment added.',
+    );
+  }
+
+  Future<void> _handleEditPayment(
+    String patientId,
+    Map<String, dynamic>? data,
+    PatientPayment payment,
+  ) async {
+    if (_isSavingPayments) return;
+
+    final draft = await showDialog<_PaymentDraft>(
+      context: context,
+      barrierDismissible: true,
+      builder:
+          (context) => _EditPaymentDialog(
+            initialAmount: payment.amount,
+            initialDate: payment.date,
+          ),
+    );
+    if (draft == null) return;
+
+    await _savePayments(patientId, data, (payments) {
+      if (payment.storageIndex < 0 || payment.storageIndex >= payments.length) {
+        throw StateError(
+          'Payment entry is out of sync. Please reopen the patient card.',
+        );
+      }
+      payments[payment.storageIndex] = draft.toPayload();
+      return payments;
+    }, successMessage: 'Payment updated.');
+  }
+
+  Future<void> _handleDeletePayment(
+    String patientId,
+    Map<String, dynamic>? data,
+    PatientPayment payment,
+  ) async {
+    if (_isSavingPayments) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            backgroundColor: AppColors.surface,
+            title: const Text(
+              'Delete payment',
+              style: TextStyle(color: AppColors.textPrimary),
+            ),
+            content: Text(
+              'Delete payment of ${_formatMoney(payment.amount)} dated ${_formatDateLabel(payment.date)}?',
+              style: const TextStyle(color: AppColors.textPrimary),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+                child: const Text('Delete'),
+              ),
+            ],
+          ),
+    );
+    if (confirmed != true) return;
+
+    await _savePayments(patientId, data, (payments) {
+      if (payment.storageIndex < 0 || payment.storageIndex >= payments.length) {
+        throw StateError(
+          'Payment entry is out of sync. Please reopen the patient card.',
+        );
+      }
+      payments.removeAt(payment.storageIndex);
+      return payments;
+    }, successMessage: 'Payment deleted.');
+  }
+
+  Future<void> _savePayments(
+    String patientId,
+    Map<String, dynamic>? data,
+    List<Map<String, dynamic>> Function(List<Map<String, dynamic>> payments)
+    transform, {
+    required String successMessage,
+  }) async {
+    if (_isSavingPayments) return;
+
+    final client = maybeSupabaseClient;
+    if (client == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Supabase is not configured.')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isSavingPayments = true;
+    });
+
+    try {
+      final currentPayments = clonePatientPaymentsPayload(data?['payments']);
+      final nextPayments = transform(currentPayments);
+
+      await client
+          .from('patients')
+          .update({
+            'payments': nextPayments,
+            'last_updated': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('id', patientId);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(successMessage)));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not update payments: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSavingPayments = false;
+        });
+      }
+    }
+  }
+
   Widget _buildDentalChart(String? patientId) {
     if (patientId == null) {
       final plan = _buildFallbackTreatmentPlan();
@@ -482,29 +649,9 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
 
     final priceValue = data['price'];
     final totalCost = priceValue is num ? priceValue.toDouble() : null;
-
-    double totalPaid = 0;
-    final paymentsRaw = data['payments'];
-    if (paymentsRaw is List) {
-      for (final p in paymentsRaw) {
-        if (p is Map) {
-          final amount = p['amount'];
-          if (amount is num) {
-            totalPaid += amount.toDouble();
-          }
-        }
-      }
-    }
+    final totalPaid = totalPaidFromPayments(data['payments']);
 
     return PaymentStats(totalCost: totalCost, totalPaid: totalPaid);
-  }
-
-  String _formatMoney(double? amount) {
-    if (amount == null) return '--';
-    final isInt = amount % 1 == 0;
-    final formatted =
-        isInt ? amount.toInt().toString() : amount.toStringAsFixed(2);
-    return '\$$formatted';
   }
 }
 
@@ -516,6 +663,35 @@ class PaymentStats {
 
   factory PaymentStats.empty() =>
       const PaymentStats(totalCost: null, totalPaid: 0);
+}
+
+String _formatMoney(double? amount) {
+  if (amount == null) return '--';
+  final isInt = amount % 1 == 0;
+  final formatted =
+      isInt ? amount.toInt().toString() : amount.toStringAsFixed(2);
+  return '\$$formatted';
+}
+
+String _formatDateLabel(DateTime date) {
+  const monthLabels = <String>[
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  final localDate = date.toLocal();
+  final day = localDate.day.toString().padLeft(2, '0');
+  final month = monthLabels[localDate.month - 1];
+  return '$day $month ${localDate.year}';
 }
 
 class _InlineWaitlistControls extends StatelessWidget {
@@ -772,6 +948,11 @@ class _InfoCard extends StatelessWidget {
   final Future<void> Function(String patientId)? onRemoveFromWaitlist;
   final String totalCostText;
   final String paidTotalText;
+  final List<PatientPayment> payments;
+  final bool isSavingPayments;
+  final Future<void> Function()? onAddPayment;
+  final Future<void> Function(PatientPayment payment)? onEditPayment;
+  final Future<void> Function(PatientPayment payment)? onDeletePayment;
 
   const _InfoCard({
     required this.resolvedName,
@@ -785,6 +966,11 @@ class _InfoCard extends StatelessWidget {
     required this.onRemoveFromWaitlist,
     required this.totalCostText,
     required this.paidTotalText,
+    required this.payments,
+    required this.isSavingPayments,
+    required this.onAddPayment,
+    required this.onEditPayment,
+    required this.onDeletePayment,
   });
 
   @override
@@ -853,6 +1039,14 @@ class _InfoCard extends StatelessWidget {
               const SizedBox(width: 12),
               _buildInfoChip('Paid to date', paidTotalText),
             ],
+          ),
+          const SizedBox(height: 20),
+          _PaymentsSection(
+            payments: payments,
+            isSaving: isSavingPayments,
+            onAddPayment: onAddPayment,
+            onEditPayment: onEditPayment,
+            onDeletePayment: onDeletePayment,
           ),
           const SizedBox(height: 20),
           Divider(color: Colors.white.withOpacity(0.1)),
@@ -932,6 +1126,465 @@ class _InfoCard extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _PaymentsSection extends StatelessWidget {
+  final List<PatientPayment> payments;
+  final bool isSaving;
+  final Future<void> Function()? onAddPayment;
+  final Future<void> Function(PatientPayment payment)? onEditPayment;
+  final Future<void> Function(PatientPayment payment)? onDeletePayment;
+
+  const _PaymentsSection({
+    required this.payments,
+    required this.isSaving,
+    required this.onAddPayment,
+    required this.onEditPayment,
+    required this.onDeletePayment,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final firstPayment = payments.isEmpty ? null : payments.first;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: buildSurfaceCardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Payments',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      firstPayment == null
+                          ? 'No payments recorded yet.'
+                          : 'First payment: ${_formatDateLabel(firstPayment.date)}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textMuted.withOpacity(0.9),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              TextButton.icon(
+                onPressed: isSaving ? null : onAddPayment,
+                icon:
+                    isSaving
+                        ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                        : const Icon(Icons.add_rounded, size: 18),
+                label: const Text('Add payment'),
+                style: TextButton.styleFrom(foregroundColor: AppColors.accent),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          if (payments.isEmpty)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.03),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+              ),
+              child: Text(
+                'Add the patient payments here. The waiting list will automatically use the earliest payment date.',
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.4,
+                  color: AppColors.textMuted.withOpacity(0.9),
+                ),
+              ),
+            )
+          else
+            Column(
+              children: [
+                for (var index = 0; index < payments.length; index++) ...[
+                  _PaymentRow(
+                    payment: payments[index],
+                    isFirstPayment: index == 0,
+                    isSaving: isSaving,
+                    onEdit:
+                        onEditPayment == null
+                            ? null
+                            : () => onEditPayment!(payments[index]),
+                    onDelete:
+                        onDeletePayment == null
+                            ? null
+                            : () => onDeletePayment!(payments[index]),
+                  ),
+                  if (index != payments.length - 1) const SizedBox(height: 10),
+                ],
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PaymentRow extends StatelessWidget {
+  final PatientPayment payment;
+  final bool isFirstPayment;
+  final bool isSaving;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
+
+  const _PaymentRow({
+    required this.payment,
+    required this.isFirstPayment,
+    required this.isSaving,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.035),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: AppColors.accent.withOpacity(0.12),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.payments_outlined,
+              size: 18,
+              color: AppColors.accent,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      _formatMoney(payment.amount),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    if (isFirstPayment) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.accentSoft,
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: AppColors.accent.withOpacity(0.28),
+                          ),
+                        ),
+                        child: const Text(
+                          'First payment',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.accent,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _formatDateLabel(payment.date),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textMuted.withOpacity(0.9),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: isSaving ? null : onEdit,
+            tooltip: 'Edit payment',
+            icon: const Icon(Icons.edit_outlined, size: 18),
+            color: AppColors.textPrimary,
+          ),
+          IconButton(
+            onPressed: isSaving ? null : onDelete,
+            tooltip: 'Delete payment',
+            icon: const Icon(Icons.delete_outline_rounded, size: 18),
+            color: Colors.redAccent.withOpacity(0.9),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PaymentDraft {
+  final double amount;
+  final DateTime date;
+
+  const _PaymentDraft({required this.amount, required this.date});
+
+  Map<String, dynamic> toPayload() {
+    return <String, dynamic>{
+      'amount': amount,
+      'date': date.toUtc().toIso8601String(),
+    };
+  }
+}
+
+class _EditPaymentDialog extends StatefulWidget {
+  final double? initialAmount;
+  final DateTime? initialDate;
+
+  const _EditPaymentDialog({this.initialAmount, this.initialDate});
+
+  @override
+  State<_EditPaymentDialog> createState() => _EditPaymentDialogState();
+}
+
+class _EditPaymentDialogState extends State<_EditPaymentDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _amountController;
+  late DateTime _selectedDate;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _amountController = TextEditingController(
+      text:
+          widget.initialAmount == null
+              ? ''
+              : widget.initialAmount! % 1 == 0
+              ? widget.initialAmount!.toInt().toString()
+              : widget.initialAmount!.toStringAsFixed(2),
+    );
+    _selectedDate = (widget.initialDate ?? DateTime.now()).toLocal();
+  }
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(now.year - 15),
+      lastDate: DateTime(now.year + 15),
+      helpText: 'Select payment date',
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _selectedDate = DateTime(
+        picked.year,
+        picked.month,
+        picked.day,
+        _selectedDate.hour,
+        _selectedDate.minute,
+      );
+    });
+  }
+
+  void _save() {
+    if (_isSaving) return;
+    if (!_formKey.currentState!.validate()) return;
+
+    final amount = double.parse(
+      _amountController.text.trim().replaceAll(',', '.'),
+    );
+    setState(() {
+      _isSaving = true;
+    });
+    Navigator.of(
+      context,
+    ).pop(_PaymentDraft(amount: amount, date: _selectedDate));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isEditing =
+        widget.initialAmount != null || widget.initialDate != null;
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                AppColors.accent.withOpacity(0.35),
+                AppColors.accentStrong.withOpacity(0.45),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(22),
+          ),
+          padding: const EdgeInsets.all(2),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.surface.withOpacity(0.98),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withOpacity(0.12)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          isEditing ? 'Edit payment' : 'Add payment',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          onPressed:
+                              _isSaving
+                                  ? null
+                                  : () => Navigator.of(context).pop(),
+                          icon: const Icon(
+                            Icons.close,
+                            color: AppColors.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _amountController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: buildFormInputDecoration(
+                        'Amount',
+                        hint: 'For example 1500',
+                      ),
+                      validator: (value) {
+                        final normalized =
+                            value?.trim().replaceAll(',', '.') ?? '';
+                        final amount = double.tryParse(normalized);
+                        if (amount == null || amount <= 0) {
+                          return 'Enter a valid amount greater than 0.';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    InkWell(
+                      onTap: _isSaving ? null : _pickDate,
+                      borderRadius: BorderRadius.circular(18),
+                      child: InputDecorator(
+                        decoration: buildFormInputDecoration('Payment date'),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.event_outlined,
+                              size: 18,
+                              color: AppColors.textMuted,
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              _formatDateLabel(_selectedDate),
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                            const Spacer(),
+                            TextButton(
+                              onPressed: _isSaving ? null : _pickDate,
+                              child: const Text('Change'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed:
+                              _isSaving
+                                  ? null
+                                  : () => Navigator.of(context).pop(),
+                          child: const Text('Cancel'),
+                        ),
+                        const SizedBox(width: 10),
+                        ElevatedButton(
+                          onPressed: _isSaving ? null : _save,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.accentStrong,
+                            foregroundColor: AppColors.bg,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                          ),
+                          child: Text(
+                            isEditing ? 'Save changes' : 'Add payment',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -2981,20 +3634,23 @@ class _TimelineEntryCard extends StatelessWidget {
       children: [
         Positioned(
           left: -21,
-          top: compact ? 14 : 18,
-          child: Container(
-            width: 10,
-            height: 10,
-            decoration: BoxDecoration(
-              color: entry.badge.dotColor,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: entry.badge.dotColor.withOpacity(0.45),
-                  blurRadius: 8,
-                  spreadRadius: 1,
-                ),
-              ],
+          top: 0,
+          bottom: 0,
+          child: Center(
+            child: Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                color: entry.badge.dotColor,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: entry.badge.dotColor.withOpacity(0.45),
+                    blurRadius: 8,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -3018,38 +3674,13 @@ class _TimelineEntryCard extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                entry.title,
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: compact ? 14 : 15,
-                                  color: AppColors.textPrimary,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: entry.badge.backgroundColor,
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Text(
-                                entry.badge.text,
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: entry.badge.textColor,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ],
+                        Text(
+                          entry.title,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: compact ? 14 : 15,
+                            color: AppColors.textPrimary,
+                          ),
                         ),
                         const SizedBox(height: 5),
                         Text(

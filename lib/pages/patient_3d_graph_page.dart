@@ -4,6 +4,7 @@ import 'package:vector_math/vector_math_64.dart' as vm;
 import 'dart:math' as math;
 
 import '../models/waitlist_stage.dart';
+import '../services/patient_payment_service.dart';
 import '../services/supabase_client.dart';
 import '../services/waitlist_service.dart';
 import '../theme/app_colors.dart';
@@ -190,18 +191,7 @@ class _Patient3DGraphPageState extends State<Patient3DGraphPage> {
     final priceValue = data['price'];
     final totalCost = priceValue is num ? priceValue.toDouble() : null;
     if (totalCost == null) return false;
-
-    double totalPaid = 0;
-    final paymentsRaw = data['payments'];
-    if (paymentsRaw is List) {
-      for (final p in paymentsRaw) {
-        if (p is Map) {
-          final amount = p['amount'];
-          if (amount is num) totalPaid += amount.toDouble();
-        }
-      }
-    }
-
+    final totalPaid = totalPaidFromPayments(data['payments']);
     return totalPaid + 0.001 < totalCost;
   }
 
