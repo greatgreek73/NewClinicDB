@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 
 import 'patient_payment_service.dart';
@@ -188,26 +190,26 @@ class WaitlistService {
   static const legacyStageField = 'priority_bucket';
   static const stageField = 'waitlist_stage';
   static const orderField = 'waitlist_order';
+  static final StreamController<void> _refreshController =
+      StreamController<void>.broadcast();
 
   Future<_WaitlistSchema>? _schemaFuture;
 
-  Stream<WaitlistAssignment> watchPatientWaitlist(String patientId) {
-    final client = maybeSupabaseClient;
+  Stream<WaitlistAssignment> watchPatientWaitlist(String patientId) async* {
     final normalizedId = patientId.trim();
-    if (client == null || normalizedId.isEmpty) {
-      return Stream.value(const WaitlistAssignment());
+    if (maybeSupabaseClient == null || normalizedId.isEmpty) {
+      yield const WaitlistAssignment();
+      return;
     }
 
-    return client.from(patientsTable).stream(primaryKey: ['id']).map((rows) {
-      for (final raw in rows) {
-        final data = Map<String, dynamic>.from(raw);
-        final id = (data['id'] ?? '').toString().trim();
-        if (id == normalizedId) {
-          return waitlistAssignmentFromData(data);
-        }
+    yield await _loadPatientWaitlist(normalizedId);
+    await for (final _ in _watchRefreshSignals()) {
+      if (maybeSupabaseClient == null) {
+        yield const WaitlistAssignment();
+      } else {
+        yield await _loadPatientWaitlist(normalizedId);
       }
-      return const WaitlistAssignment();
-    });
+    }
   }
 
   Stream<List<WaitlistEntry>> watchPatientsInStage(int stageId) {
@@ -222,26 +224,22 @@ class WaitlistService {
     });
   }
 
-  Stream<List<WaitlistEntry>> watchAllWaitlistEntries({int maxRows = 500}) {
-    final client = maybeSupabaseClient;
-    if (client == null) {
-      return Stream.value(const <WaitlistEntry>[]);
+  Stream<List<WaitlistEntry>> watchAllWaitlistEntries({
+    int maxRows = 500,
+  }) async* {
+    if (maybeSupabaseClient == null) {
+      yield const <WaitlistEntry>[];
+      return;
     }
 
-    return client.from(patientsTable).stream(primaryKey: ['id']).map((rows) {
-      final entries =
-          rows
-              .map((row) => Map<String, dynamic>.from(row))
-              .map(waitlistEntryFromRow)
-              .where((entry) => entry.stageId != null)
-              .toList()
-            ..sort(compareWaitlistEntries);
-
-      if (entries.length > maxRows) {
-        return entries.sublist(0, maxRows);
+    yield await _loadAssignedWaitlistEntries(maxRows: maxRows);
+    await for (final _ in _watchRefreshSignals()) {
+      if (maybeSupabaseClient == null) {
+        yield const <WaitlistEntry>[];
+      } else {
+        yield await _loadAssignedWaitlistEntries(maxRows: maxRows);
       }
-      return entries;
-    });
+    }
   }
 
   Future<WaitlistSchemaCapabilities> getCapabilities() async {
@@ -274,6 +272,7 @@ class WaitlistService {
         stageId: stageId,
         order: null,
       );
+      _notifyRefresh();
       return;
     }
 
@@ -289,6 +288,7 @@ class WaitlistService {
       stageId: stageId,
       order: nextWaitlistOrder(stageEntries),
     );
+    _notifyRefresh();
   }
 
   Future<void> movePatientToStage(String patientId, int stageId) async {
@@ -313,6 +313,7 @@ class WaitlistService {
         stageId: stageId,
         order: null,
       );
+      _notifyRefresh();
       return;
     }
 
@@ -353,6 +354,7 @@ class WaitlistService {
       stageId: stageId,
       order: nextWaitlistOrder(targetEntries),
     );
+    _notifyRefresh();
   }
 
   Future<void> movePatientUp(String patientId) async {
@@ -379,6 +381,7 @@ class WaitlistService {
         stageId: null,
         order: null,
       );
+      _notifyRefresh();
       return;
     }
 
@@ -400,6 +403,7 @@ class WaitlistService {
       compactWaitlistStage(stageEntries),
       schema: schema,
     );
+    _notifyRefresh();
   }
 
   Future<void> _movePatient(String patientId, int delta) async {
@@ -421,6 +425,7 @@ class WaitlistService {
         entries.where((entry) => entry.stageId == current!.stageId).toList();
     final patches = buildWaitlistMovePatches(stageEntries, normalizedId, delta);
     await _applyOrderPatches(patches, schema: schema);
+    _notifyRefresh();
   }
 
   Future<List<WaitlistEntry>> _loadWaitlistEntries() async {
@@ -428,11 +433,9 @@ class WaitlistService {
       throw StateError('Supabase is not initialized');
     }
 
-    final response = await supabaseClient.from(patientsTable).select();
-    return (response as List)
-        .map((row) => Map<String, dynamic>.from(row as Map))
-        .map(waitlistEntryFromRow)
-        .toList();
+    final schema = await _resolveSchema();
+    final rows = await _loadWaitlistRows(schema);
+    return rows.map(waitlistEntryFromRow).toList();
   }
 
   WaitlistEntry? _findEntry(List<WaitlistEntry> entries, String patientId) {
@@ -531,6 +534,93 @@ class WaitlistService {
         return false;
       }
       rethrow;
+    }
+  }
+
+  Future<WaitlistAssignment> _loadPatientWaitlist(String patientId) async {
+    final schema = await _resolveSchema();
+    final selectColumns = <String>[
+      'id',
+      schema.stageField,
+      if (schema.orderField != null) schema.orderField!,
+    ].join(',');
+
+    final response =
+        await supabaseClient
+            .from(patientsTable)
+            .select(selectColumns)
+            .eq('id', patientId)
+            .maybeSingle();
+    if (response == null) {
+      return const WaitlistAssignment();
+    }
+    return waitlistAssignmentFromData(
+      Map<String, dynamic>.from(response as Map),
+    );
+  }
+
+  Future<List<WaitlistEntry>> _loadAssignedWaitlistEntries({
+    required int maxRows,
+  }) async {
+    final entries =
+        (await _loadWaitlistEntries())
+            .where((entry) => entry.stageId != null)
+            .toList()
+          ..sort(compareWaitlistEntries);
+
+    if (entries.length > maxRows) {
+      return entries.sublist(0, maxRows);
+    }
+    return entries;
+  }
+
+  Future<List<Map<String, dynamic>>> _loadWaitlistRows(
+    _WaitlistSchema schema,
+  ) async {
+    const pageSize = 1000;
+    final selectColumns = <String>[
+      'id',
+      'name',
+      'surname',
+      'phone',
+      'city',
+      'payments',
+      schema.stageField,
+      if (schema.orderField != null) schema.orderField!,
+    ].join(',');
+    final rows = <Map<String, dynamic>>[];
+
+    for (var start = 0; true; start += pageSize) {
+      final response = await supabaseClient
+          .from(patientsTable)
+          .select(selectColumns)
+          .range(start, start + pageSize - 1);
+      final batch =
+          (response as List)
+              .map((row) => Map<String, dynamic>.from(row as Map))
+              .toList();
+      rows.addAll(batch);
+      if (batch.length < pageSize) {
+        break;
+      }
+    }
+
+    return rows;
+  }
+
+  Stream<void> _watchRefreshSignals() async* {
+    while (true) {
+      await Future.any<void>([
+        _refreshController.stream.first,
+        Future<void>.delayed(const Duration(seconds: 30)),
+      ]);
+      yield null;
+    }
+  }
+
+  void _notifyRefresh() {
+    if (!_refreshController.isClosed) {
+      _refreshController.add(null);
     }
   }
 }

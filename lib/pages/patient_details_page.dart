@@ -95,7 +95,7 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
             patientId != null &&
             snapshot.connectionState == ConnectionState.waiting;
         final initialWaitlist = waitlistAssignmentFromData(data);
-        final paymentStats = _computePaymentStats(data);
+        final totalCostText = _formatMoney(_totalCostFromData(data));
         final payments = parsePatientPayments(data?['payments']);
 
         return LayoutBuilder(
@@ -109,11 +109,8 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
               initialWaitlist: initialWaitlist,
               isSavingWaitlist: _isSavingWaitlist,
               waitlistService: _waitlistService,
-              onAddToWaitlist: _handleAddToWaitlist,
               onStageSelect: _handleStageSelect,
-              onRemoveFromWaitlist: _handleRemoveFromWaitlist,
-              totalCostText: _formatMoney(paymentStats.totalCost),
-              paidTotalText: _formatMoney(paymentStats.totalPaid),
+              totalCostText: totalCostText,
               payments: payments,
               isSavingPayments: _isSavingPayments,
               onAddPayment:
@@ -231,15 +228,9 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
                     final title = stage?.title ?? 'Not on waiting list';
                     final desc =
                         stage?.description ??
-                        'Add this patient to the waiting list from the card above.';
-                    final queueLine =
-                        assignment.order != null
-                            ? ' Queue position #${assignment.order}.'
-                            : assignment.isOnWaitlist
-                            ? ' Queue order will appear after the database migration is applied.'
-                            : '';
+                        'Tap a stage icon above to place this patient in the waiting list.';
                     return Text(
-                      '$title — $desc$queueLine',
+                      '$title — $desc',
                       style: TextStyle(
                         fontSize: 12,
                         color: AppColors.textMuted.withOpacity(0.9),
@@ -272,32 +263,6 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
     );
   }
 
-  Future<void> _handleAddToWaitlist(String patientId) async {
-    if (_isSavingWaitlist) return;
-    setState(() {
-      _isSavingWaitlist = true;
-    });
-
-    try {
-      await _waitlistService.addPatientToWaitlist(patientId);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Added to waiting list: New.')),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not add to waiting list: $error')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSavingWaitlist = false;
-        });
-      }
-    }
-  }
-
   Future<void> _handleStageSelect(
     String patientId,
     int stageId,
@@ -326,32 +291,6 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not update waiting list: $error')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSavingWaitlist = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _handleRemoveFromWaitlist(String patientId) async {
-    if (_isSavingWaitlist) return;
-    setState(() {
-      _isSavingWaitlist = true;
-    });
-
-    try {
-      await _waitlistService.removeFromWaitlist(patientId);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Removed from waiting list.')),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not remove from waiting list: $error')),
       );
     } finally {
       if (mounted) {
@@ -644,25 +583,11 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
     );
   }
 
-  PaymentStats _computePaymentStats(Map<String, dynamic>? data) {
-    if (data == null) return PaymentStats.empty();
-
+  double? _totalCostFromData(Map<String, dynamic>? data) {
+    if (data == null) return null;
     final priceValue = data['price'];
-    final totalCost = priceValue is num ? priceValue.toDouble() : null;
-    final totalPaid = totalPaidFromPayments(data['payments']);
-
-    return PaymentStats(totalCost: totalCost, totalPaid: totalPaid);
+    return priceValue is num ? priceValue.toDouble() : null;
   }
-}
-
-class PaymentStats {
-  final double? totalCost;
-  final double totalPaid;
-
-  const PaymentStats({required this.totalCost, required this.totalPaid});
-
-  factory PaymentStats.empty() =>
-      const PaymentStats(totalCost: null, totalPaid: 0);
 }
 
 String _formatMoney(double? amount) {
@@ -699,23 +624,19 @@ class _InlineWaitlistControls extends StatelessWidget {
   final WaitlistAssignment initialWaitlist;
   final bool isSaving;
   final WaitlistService waitlistService;
-  final Future<void> Function(String patientId)? onAdd;
   final Future<void> Function(
     String patientId,
     int stageId,
     WaitlistAssignment currentAssignment,
   )?
   onStageSelect;
-  final Future<void> Function(String patientId)? onRemove;
 
   const _InlineWaitlistControls({
     required this.patientId,
     required this.initialWaitlist,
     required this.isSaving,
     required this.waitlistService,
-    required this.onAdd,
     required this.onStageSelect,
-    required this.onRemove,
   });
 
   @override
@@ -739,83 +660,12 @@ class _InlineWaitlistControls extends StatelessWidget {
             snapshot.connectionState == ConnectionState.waiting &&
             assignment.stageId == null;
         final isBusy = isSaving || isStreamLoading;
-
-        if (!assignment.isOnWaitlist) {
-          return OutlinedButton.icon(
-            onPressed: isBusy ? null : () => onAdd?.call(resolvedId),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: AppColors.textPrimary,
-              side: BorderSide(color: Colors.white.withOpacity(0.18)),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(999),
-              ),
-            ),
-            icon:
-                isBusy
-                    ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation(AppColors.accent),
-                      ),
-                    )
-                    : const Icon(Icons.playlist_add_rounded, size: 18),
-            label: const Text('Add to waiting list'),
-          );
-        }
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _WaitlistStageRow(
-              activeStageId: assignment.stageId,
-              enabled: !isBusy,
-              isSaving: isBusy,
-              onTap:
-                  (stageId) =>
-                      onStageSelect?.call(resolvedId, stageId, assignment),
-            ),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.06),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: Colors.white.withOpacity(0.1)),
-                  ),
-                  child: Text(
-                    'Queue #${assignment.order ?? '—'}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textMuted.withOpacity(0.9),
-                    ),
-                  ),
-                ),
-                TextButton.icon(
-                  onPressed: isBusy ? null : () => onRemove?.call(resolvedId),
-                  style: TextButton.styleFrom(
-                    foregroundColor: Colors.redAccent.withOpacity(0.95),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                  ),
-                  icon: const Icon(Icons.close_rounded, size: 18),
-                  label: const Text('Remove'),
-                ),
-              ],
-            ),
-          ],
+        return _WaitlistStageRow(
+          activeStageId: assignment.stageId,
+          enabled: !isBusy,
+          isSaving: isBusy,
+          onTap:
+              (stageId) => onStageSelect?.call(resolvedId, stageId, assignment),
         );
       },
     );
@@ -938,16 +788,13 @@ class _InfoCard extends StatelessWidget {
   final WaitlistAssignment initialWaitlist;
   final bool isSavingWaitlist;
   final WaitlistService waitlistService;
-  final Future<void> Function(String patientId)? onAddToWaitlist;
   final Future<void> Function(
     String patientId,
     int stageId,
     WaitlistAssignment currentAssignment,
   )?
   onStageSelect;
-  final Future<void> Function(String patientId)? onRemoveFromWaitlist;
   final String totalCostText;
-  final String paidTotalText;
   final List<PatientPayment> payments;
   final bool isSavingPayments;
   final Future<void> Function()? onAddPayment;
@@ -961,11 +808,8 @@ class _InfoCard extends StatelessWidget {
     required this.initialWaitlist,
     required this.isSavingWaitlist,
     required this.waitlistService,
-    required this.onAddToWaitlist,
     required this.onStageSelect,
-    required this.onRemoveFromWaitlist,
     required this.totalCostText,
-    required this.paidTotalText,
     required this.payments,
     required this.isSavingPayments,
     required this.onAddPayment,
@@ -1023,25 +867,16 @@ class _InfoCard extends StatelessWidget {
                       initialWaitlist: initialWaitlist,
                       isSaving: isSavingWaitlist,
                       waitlistService: waitlistService,
-                      onAdd: onAddToWaitlist,
                       onStageSelect: onStageSelect,
-                      onRemove: onRemoveFromWaitlist,
                     ),
                   ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              _buildInfoChip('Total cost', totalCostText),
-              const SizedBox(width: 12),
-              _buildInfoChip('Paid to date', paidTotalText),
-            ],
-          ),
           const SizedBox(height: 20),
           _PaymentsSection(
+            totalCostText: totalCostText,
             payments: payments,
             isSaving: isSavingPayments,
             onAddPayment: onAddPayment,
@@ -1085,35 +920,6 @@ class _InfoCard extends StatelessWidget {
     );
   }
 
-  Widget _buildInfoChip(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: buildSurfaceCardDecoration(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label.toUpperCase(),
-            style: TextStyle(
-              fontSize: 10,
-              letterSpacing: 1.5,
-              color: AppColors.textMuted.withOpacity(0.8),
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            value,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildContactRow(IconData icon, String value) {
     return Row(
       children: [
@@ -1131,6 +937,7 @@ class _InfoCard extends StatelessWidget {
 }
 
 class _PaymentsSection extends StatelessWidget {
+  final String totalCostText;
   final List<PatientPayment> payments;
   final bool isSaving;
   final Future<void> Function()? onAddPayment;
@@ -1138,6 +945,7 @@ class _PaymentsSection extends StatelessWidget {
   final Future<void> Function(PatientPayment payment)? onDeletePayment;
 
   const _PaymentsSection({
+    required this.totalCostText,
     required this.payments,
     required this.isSaving,
     required this.onAddPayment,
@@ -1198,6 +1006,36 @@ class _PaymentsSection extends StatelessWidget {
                 style: TextButton.styleFrom(foregroundColor: AppColors.accent),
               ),
             ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.04),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white.withOpacity(0.08)),
+            ),
+            child: Row(
+              children: [
+                Text(
+                  'TOTAL COST',
+                  style: TextStyle(
+                    fontSize: 10,
+                    letterSpacing: 1.4,
+                    color: AppColors.textMuted.withOpacity(0.78),
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  totalCostText,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 14),
           if (payments.isEmpty)

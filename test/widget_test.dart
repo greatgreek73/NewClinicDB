@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('Patient details shows add to waiting list action', (
+  testWidgets('Patient details shows waitlist controls and payments', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -25,8 +25,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Patient overview'), findsOneWidget);
-    expect(find.text('Add to waiting list'), findsOneWidget);
     expect(find.textContaining('Not on waiting list'), findsOneWidget);
+    expect(find.textContaining('Tap a stage icon above'), findsOneWidget);
     expect(find.text('Payments'), findsOneWidget);
     expect(find.text('Add payment'), findsOneWidget);
   });

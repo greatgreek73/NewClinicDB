@@ -47,6 +47,13 @@ const List<WaitlistStageDefinition> waitlistStages = [
     color: Color(0xFF78A0FF),
     icon: Icons.pause_circle_outline_rounded,
   ),
+  WaitlistStageDefinition(
+    id: 5,
+    title: 'Completed',
+    description: 'Patients who have already completed treatment.',
+    color: Color(0xFF4DD0C8),
+    icon: Icons.task_alt_rounded,
+  ),
 ];
 
 WaitlistStageDefinition? waitlistStageById(int id) {

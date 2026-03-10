@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'app_route_observer.dart';
 import 'pages/add_patient_page.dart';
 import 'pages/dashboard_page.dart';
 import 'pages/patient_3d_graph_page.dart';
@@ -74,6 +75,7 @@ class MyApp extends StatelessWidget {
         PatientDetailsPage.routeName: (context) => const PatientDetailsPage(),
         Patient3DGraphPage.routeName: (context) => const Patient3DGraphPage(),
       },
+      navigatorObservers: [appRouteObserver],
       home: const ClinicDashboardPage(),
     );
   }

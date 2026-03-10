@@ -25,5 +25,6 @@ void main() {
     expect(find.text('Contact'), findsOneWidget);
     expect(find.text('Ready'), findsOneWidget);
     expect(find.text('Deferred'), findsOneWidget);
+    expect(find.text('Completed'), findsOneWidget);
   });
 }

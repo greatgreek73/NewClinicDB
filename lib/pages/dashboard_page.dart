@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../app_route_observer.dart';
 import '../models/waitlist_stage.dart';
+import '../services/daily_revenue_service.dart';
 import '../services/supabase_client.dart';
 import '../theme/app_colors.dart';
 import '../theme/system_ui.dart';
@@ -19,17 +23,72 @@ class ClinicDashboardPage extends StatefulWidget {
   State<ClinicDashboardPage> createState() => _ClinicDashboardPageState();
 }
 
-class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
+class _ClinicDashboardPageState extends State<ClinicDashboardPage>
+    with RouteAware {
   bool isToday = true;
   bool _isLoadingPatients = false;
   int? _todayPatientsCount;
   String? _patientsError;
+  bool _isLoadingRevenue = false;
+  double? _todayRevenue;
+  String? _revenueError;
   final WaitlistService _waitlistService = WaitlistService();
+  late final Stream<List<WaitlistEntry>> _waitlistEntriesStream;
+  ModalRoute<dynamic>? _subscribedRoute;
+  Timer? _dashboardClockTimer;
 
   @override
   void initState() {
     super.initState();
+    _waitlistEntriesStream = _waitlistService.watchAllWaitlistEntries();
+    _loadTodayDashboardMetrics();
+    _startDashboardClock();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route == null || route == _subscribedRoute) return;
+
+    if (_subscribedRoute != null) {
+      appRouteObserver.unsubscribe(this);
+    }
+
+    appRouteObserver.subscribe(this, route);
+    _subscribedRoute = route;
+  }
+
+  @override
+  void dispose() {
+    _dashboardClockTimer?.cancel();
+    if (_subscribedRoute != null) {
+      appRouteObserver.unsubscribe(this);
+    }
+    super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    _loadTodayDashboardMetrics();
+  }
+
+  void _startDashboardClock() {
+    _dashboardClockTimer?.cancel();
+    _dashboardClockTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (!mounted) return;
+      final now = DateTime.now();
+      if (now.minute == 0) {
+        _loadTodayRevenue();
+        return;
+      }
+      setState(() {});
+    });
+  }
+
+  void _loadTodayDashboardMetrics() {
     _loadTodayPatientsCount();
+    _loadTodayRevenue();
   }
 
   Future<void> _loadTodayPatientsCount() async {
@@ -85,6 +144,67 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
     }
   }
 
+  Future<void> _loadTodayRevenue() async {
+    if (_isLoadingRevenue) return;
+
+    setState(() {
+      _isLoadingRevenue = true;
+      _revenueError = null;
+    });
+
+    try {
+      final client = maybeSupabaseClient;
+      if (client == null) {
+        setState(() {
+          _revenueError = 'Supabase is not configured';
+          _todayRevenue = null;
+        });
+        return;
+      }
+
+      final now = DateTime.now();
+      final startOfDay = DateTime(now.year, now.month, now.day).toUtc();
+      final endOfDay = startOfDay.add(const Duration(days: 1));
+      const pageSize = 1000;
+      final rows = <Map<String, dynamic>>[];
+
+      for (var start = 0; true; start += pageSize) {
+        final batch = await client
+            .from('patients')
+            .select('payments')
+            .range(start, start + pageSize - 1);
+        final batchRows =
+            (batch as List)
+                .map((row) => Map<String, dynamic>.from(row as Map))
+                .toList();
+        rows.addAll(batchRows);
+        if (batchRows.length < pageSize) break;
+      }
+
+      final revenue = totalPaymentsInRangeFromRows(
+        rows,
+        startInclusive: startOfDay,
+        endExclusive: endOfDay,
+      );
+
+      setState(() {
+        _todayRevenue = revenue;
+        _revenueError = null;
+      });
+    } catch (error) {
+      setState(() {
+        _revenueError = 'Unable to load';
+        _todayRevenue = null;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingRevenue = false;
+        });
+      }
+    }
+  }
+
   String get _patientsCardValue {
     if (_isLoadingPatients) return '…';
     if (_patientsError != null) return '--';
@@ -99,6 +219,27 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
       return 'Check appointments data';
     }
     return 'Any treatment logged today';
+  }
+
+  String get _revenueCardValue {
+    if (_isLoadingRevenue) return '…';
+    if (_revenueError != null) return '--';
+    return _formatCurrency(_todayRevenue ?? 0);
+  }
+
+  String get _revenueCardSubtitle {
+    if (_isLoadingRevenue) {
+      return 'Loading today\'s revenue…';
+    }
+    if (_revenueError != null) {
+      return 'Check payment data';
+    }
+
+    final pace = revenuePerWorkingHourToday(_todayRevenue ?? 0, DateTime.now());
+    if (pace == null) {
+      return 'Workday starts at 08:15';
+    }
+    return 'Earned/hour today: ${_formatCurrency(pace)}';
   }
 
   @override
@@ -355,8 +496,8 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
         _buildStatCard(title: 'Canceled', value: '2', subtitle: 'No-shows: 1'),
         _buildStatCard(
           title: 'Revenue today',
-          value: '\$4,380',
-          subtitle: 'Avg. per visit: \$240',
+          value: _revenueCardValue,
+          subtitle: _revenueCardSubtitle,
         ),
       ],
     );
@@ -509,7 +650,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
                   border: Border.all(color: Colors.white.withOpacity(0.08)),
                 ),
                 child: const Text(
-                  '4 stages',
+                  '5 stages',
                   style: TextStyle(fontSize: 11, color: AppColors.textMuted),
                 ),
               ),
@@ -517,7 +658,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Tap a stage to open the queue. Reorder patients there and move them between waiting list stages.',
+            'Tap a stage to open the list and move patients between waiting list stages.',
             style: TextStyle(
               fontSize: 13,
               color: AppColors.textMuted.withOpacity(0.9),
@@ -525,7 +666,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
           ),
           const SizedBox(height: 14),
           StreamBuilder<List<WaitlistEntry>>(
-            stream: _waitlistService.watchAllWaitlistEntries(),
+            stream: _waitlistEntriesStream,
             builder: (context, snapshot) {
               final allEntries = snapshot.data ?? const <WaitlistEntry>[];
               final isLoading =
@@ -536,7 +677,14 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
                 builder: (context, constraints) {
                   const spacing = 12.0;
                   final maxWidth = constraints.maxWidth;
-                  final columns = maxWidth >= 760 ? 4 : 2;
+                  final columns =
+                      maxWidth >= 1120
+                          ? 5
+                          : maxWidth >= 760
+                          ? 4
+                          : maxWidth >= 540
+                          ? 3
+                          : 2;
                   final itemWidth =
                       (maxWidth - spacing * (columns - 1)) / columns;
 
@@ -855,6 +1003,25 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage> {
       ),
     );
   }
+}
+
+String _formatCurrency(double amount) {
+  return '\$${_formatThousands(amount.round())}';
+}
+
+String _formatThousands(int value) {
+  final digits = value.abs().toString();
+  final buffer = StringBuffer();
+
+  for (var index = 0; index < digits.length; index++) {
+    if (index > 0 && (digits.length - index) % 3 == 0) {
+      buffer.write('.');
+    }
+    buffer.write(digits[index]);
+  }
+
+  final sign = value < 0 ? '-' : '';
+  return '$sign$buffer';
 }
 
 class _DashboardWaitlistCard extends StatelessWidget {

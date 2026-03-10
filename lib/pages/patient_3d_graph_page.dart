@@ -109,12 +109,6 @@ class _Patient3DGraphPageState extends State<Patient3DGraphPage> {
 
     const maxPatientsPerStage = 20;
     final families = <Patient3DFamily>[];
-    final familyPositions = <vm.Vector3>[
-      vm.Vector3(-3, 0, 0),
-      vm.Vector3(3, 1, 0),
-      vm.Vector3(0, -2.5, 1),
-      vm.Vector3(0, 2.5, -1),
-    ];
 
     final response = await client.from('patients').select();
     final patientRows =
@@ -170,13 +164,26 @@ class _Patient3DGraphPageState extends State<Patient3DGraphPage> {
           id: 'stage-${stage.id}',
           name: stage.title,
           color: stage.color,
-          position: familyPositions[i % familyPositions.length],
+          position: _computeFamilyPosition(i, waitlistStages.length),
           patients: patients,
         ),
       );
     }
 
     return families;
+  }
+
+  vm.Vector3 _computeFamilyPosition(int index, int total) {
+    final safeTotal = total <= 0 ? 1 : total;
+    final angle = (index / safeTotal) * math.pi * 2 - math.pi / 2;
+    final radius = safeTotal >= 5 ? 3.4 : 3.0;
+    final yOffsets = <double>[-0.5, 0.85, -1.1, 1.1, 0.2];
+    final y = yOffsets[index % yOffsets.length];
+    return vm.Vector3(
+      math.cos(angle) * radius,
+      y,
+      math.sin(angle) * radius * 0.8,
+    );
   }
 
   vm.Vector3 _computePatientOffset(int index, int total) {
