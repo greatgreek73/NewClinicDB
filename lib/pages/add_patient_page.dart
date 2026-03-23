@@ -31,6 +31,7 @@ class _AddPatientContentState extends State<_AddPatientContent> {
   final _surnameController = TextEditingController();
   final _phoneController = TextEditingController();
   final _cityController = TextEditingController();
+  final _notesController = TextEditingController();
   final _ageController = TextEditingController();
   final _photoUrlController = TextEditingController();
   String? _gender;
@@ -42,6 +43,7 @@ class _AddPatientContentState extends State<_AddPatientContent> {
     _surnameController.dispose();
     _phoneController.dispose();
     _cityController.dispose();
+    _notesController.dispose();
     _ageController.dispose();
     _photoUrlController.dispose();
     super.dispose();
@@ -55,6 +57,7 @@ class _AddPatientContentState extends State<_AddPatientContent> {
     final surname = _surnameController.text.trim();
     final phone = _phoneController.text.trim();
     final city = _cityController.text.trim();
+    final notes = _notesController.text.trim();
     final photoUrl = _photoUrlController.text.trim();
     if (name.isEmpty || surname.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -76,6 +79,7 @@ class _AddPatientContentState extends State<_AddPatientContent> {
 
     if (phone.isNotEmpty) payload['phone'] = phone;
     if (city.isNotEmpty) payload['city'] = city;
+    if (notes.isNotEmpty) payload['notes'] = notes;
     if (_gender != null && _gender!.isNotEmpty) {
       payload['gender'] = _gender;
     }
@@ -139,6 +143,17 @@ class _AddPatientContentState extends State<_AddPatientContent> {
         TextFormField(
           controller: _cityController,
           decoration: buildFormInputDecoration('City'),
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          controller: _notesController,
+          decoration: buildFormInputDecoration(
+            'Notes',
+            hint: 'Important preferences, complaints, reminders',
+          ),
+          maxLines: 4,
+          minLines: 3,
+          textInputAction: TextInputAction.newline,
         ),
         const SizedBox(height: 16),
         DropdownButtonFormField<String>(

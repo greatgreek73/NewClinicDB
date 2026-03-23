@@ -7,7 +7,11 @@ import 'pages/add_patient_page.dart';
 import 'pages/dashboard_page.dart';
 import 'pages/patient_3d_graph_page.dart';
 import 'pages/patient_details_page.dart';
+import 'pages/schedule_page.dart';
 import 'pages/search_page.dart';
+import 'pages/stats_page.dart';
+import 'pages/waiting_room_page.dart';
+import 'pages/waiting_room_reason_settings_page.dart';
 import 'supabase_config.dart';
 import 'theme/app_colors.dart';
 import 'theme/system_ui.dart';
@@ -74,6 +78,11 @@ class MyApp extends StatelessWidget {
         AddPatientPage.routeName: (context) => const AddPatientPage(),
         PatientDetailsPage.routeName: (context) => const PatientDetailsPage(),
         Patient3DGraphPage.routeName: (context) => const Patient3DGraphPage(),
+        SchedulePage.routeName: (context) => const SchedulePage(),
+        StatsPage.routeName: (context) => const StatsPage(),
+        WaitingRoomPage.routeName: (context) => const WaitingRoomPage(),
+        WaitingRoomReasonSettingsPage.routeName:
+            (context) => const WaitingRoomReasonSettingsPage(),
       },
       navigatorObservers: [appRouteObserver],
       home: const ClinicDashboardPage(),

@@ -1,23 +1,34 @@
 import 'package:flutter/material.dart';
+
+import '../services/patient_lookup_service.dart';
 import '../services/recent_patient_search_service.dart';
-import '../services/supabase_client.dart';
 import '../theme/app_colors.dart';
-import '../utils/patient_name_formatter.dart';
 import '../widgets/page_header.dart';
 import '../widgets/primary_page_scaffold.dart';
 import 'patient_details_page.dart';
 
 class SearchPage extends StatelessWidget {
   static const routeName = '/search';
-  const SearchPage({Key? key}) : super(key: key);
+
+  final PatientLookupService patientLookupService;
+
+  const SearchPage({super.key, PatientLookupService? patientLookupService})
+    : patientLookupService =
+          patientLookupService ?? const PatientLookupService();
+
   @override
   Widget build(BuildContext context) {
-    return const PrimaryPageScaffold(child: _SearchContent());
+    return PrimaryPageScaffold(
+      child: _SearchContent(patientLookupService: patientLookupService),
+    );
   }
 }
 
 class _SearchContent extends StatefulWidget {
-  const _SearchContent({Key? key}) : super(key: key);
+  final PatientLookupService patientLookupService;
+
+  const _SearchContent({required this.patientLookupService});
+
   @override
   State<_SearchContent> createState() => _SearchContentState();
 }
@@ -26,6 +37,7 @@ class _SearchContentState extends State<_SearchContent> {
   final TextEditingController _searchController = TextEditingController();
   final RecentPatientSearchService _recentSearchService =
       RecentPatientSearchService();
+
   List<_SearchResult> _results = [];
   List<_SearchResult> _recentResults = [];
   bool _isLoading = false;
@@ -60,36 +72,19 @@ class _SearchContentState extends State<_SearchContent> {
   Future<List<RecentPatientSearchEntry>> _hydrateRecentPatients(
     List<RecentPatientSearchEntry> entries,
   ) async {
-    final client = maybeSupabaseClient;
-    if (client == null || entries.isEmpty) return entries;
+    if (entries.isEmpty) return entries;
 
     final hydrated = await Future.wait(
       entries.map((entry) async {
         try {
-          final response =
-              await client
-                  .from('patients')
-                  .select('id, name, surname, phone, city')
-                  .eq('id', entry.id)
-                  .maybeSingle();
-          if (response is! Map) return entry;
-
-          final data = Map<String, dynamic>.from(response as Map);
-          final phone = data['phone']?.toString().trim() ?? '';
-          final city = data['city']?.toString().trim() ?? '';
-          final subtitle = [
-            phone,
-            city,
-          ].where((value) => value.isNotEmpty).join(' • ');
+          final loaded = await widget.patientLookupService.loadById(entry.id);
+          if (loaded == null) return entry;
 
           return RecentPatientSearchEntry(
             id: entry.id,
-            title: formatPatientDisplayName(
-              name: data['name'],
-              surname: data['surname'],
-              fallback: entry.title,
-            ),
-            subtitle: subtitle.isNotEmpty ? subtitle : entry.subtitle,
+            title: loaded.title.isNotEmpty ? loaded.title : entry.title,
+            subtitle:
+                loaded.subtitle.isNotEmpty ? loaded.subtitle : entry.subtitle,
           );
         } catch (_) {
           return entry;
@@ -135,45 +130,40 @@ class _SearchContentState extends State<_SearchContent> {
       });
       return;
     }
+
+    final phoneDigits = cleanQuery.replaceAll(RegExp(r'[^0-9]'), '');
     final normalized = cleanQuery.toLowerCase();
     final tokens =
-        normalized.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+        normalized
+            .split(RegExp(r'\s+'))
+            .where((token) => token.isNotEmpty)
+            .toList();
     final searchTerm = tokens.isNotEmpty ? tokens.first : normalized;
-    final additionalTokens = tokens.skip(1).toList();
-    final phoneDigits = cleanQuery.replaceAll(RegExp(r'[^0-9]'), '');
+
     setState(() {
       _isLoading = true;
       _error = null;
     });
+
     try {
-      final List<Future<List<_SearchResult>>> pending = [];
-      if (searchTerm.isNotEmpty) {
-        pending.add(_searchByName(searchTerm, additionalTokens));
-      }
-      if (phoneDigits.length >= 3) {
-        pending.add(_searchByPhone(phoneDigits));
-      }
-      if (pending.isEmpty) {
+      if (searchTerm.isEmpty && phoneDigits.length < 3) {
         setState(() {
           _results = [];
           _isLoading = false;
         });
         return;
       }
-      final responses = await Future.wait(pending);
-      final Map<String, _SearchResult> merged = {};
-      for (final list in responses) {
-        for (final result in list) {
-          merged.putIfAbsent(result.id, () => result);
-        }
-      }
+
+      final results = await widget.patientLookupService.search(cleanQuery);
+      if (!mounted) return;
       setState(() {
-        _results = merged.values.toList();
+        _results = results.map(_mapLookupResult).toList();
         _isLoading = false;
       });
-    } catch (e) {
+    } catch (error) {
+      if (!mounted) return;
       setState(() {
-        _error = 'Error: $e';
+        _error = 'Error: $error';
         _isLoading = false;
       });
     }
@@ -198,135 +188,17 @@ class _SearchContentState extends State<_SearchContent> {
     );
   }
 
-  Future<List<_SearchResult>> _searchByName(
-    String searchTerm,
-    List<String> additionalTokens,
-  ) async {
-    final snapshot = await _queryPatientsByPrefix(
-      primaryField: 'search_key',
-      fallbackField: 'surname',
-      prefix: searchTerm,
-      limit: 25,
-    );
-    final loweredTokens = additionalTokens
-        .where((t) => t.isNotEmpty)
-        .map((t) => t.toLowerCase());
-    final List<_SearchResult> results = [];
-    for (final row in snapshot) {
-      final data = row;
-      final searchable = _collectSearchableText(data);
-      final matchesFilters = loweredTokens.every(searchable.contains);
-      if (!matchesFilters) continue;
-      final result = _buildResultFromRow(data, meta: 'Patient record');
-      if (result.id.isEmpty) continue;
-      results.add(result);
-    }
-    return results;
-  }
-
-  Future<List<_SearchResult>> _searchByPhone(String digits) async {
-    final normalizedDigits = digits.replaceAll(RegExp(r'[^0-9]'), '');
-    if (normalizedDigits.length < 3) return [];
-    final prefixes = <String>{normalizedDigits, '+$normalizedDigits'};
-    final List<_SearchResult> results = [];
-    for (final prefix in prefixes) {
-      if (prefix.isEmpty) continue;
-      final snapshot = await _queryPatientsByPrefix(
-        primaryField: 'phone',
-        fallbackField: 'phone',
-        prefix: prefix,
-        limit: 25,
-      );
-      for (final data in snapshot) {
-        final docDigits = _normalizePhone(data['phone']);
-        if (!docDigits.contains(normalizedDigits)) continue;
-        final result = _buildResultFromRow(data, meta: 'Phone match');
-        if (result.id.isEmpty) continue;
-        results.add(result);
-      }
-    }
-    return results;
-  }
-
-  _SearchResult _buildResultFromRow(
-    Map<String, dynamic> data, {
-    required String meta,
-  }) {
-    final id = (data['id'] ?? '').toString().trim();
-    final phone = data['phone']?.toString().trim() ?? '';
-    final city = data['city']?.toString().trim() ?? '';
-    final subtitle = [phone, city].where((e) => e.isNotEmpty).join(' • ');
+  _SearchResult _mapLookupResult(PatientLookupResult result) {
     return _SearchResult(
-      id: id,
-      title: formatPatientDisplayName(
-        name: data['name'],
-        surname: data['surname'],
-        fallback: 'Unknown Patient',
-      ),
-      subtitle: subtitle.isNotEmpty ? subtitle : 'No details',
-      meta: meta,
+      id: result.id,
+      title: result.title,
+      subtitle: result.subtitle.isNotEmpty ? result.subtitle : 'No details',
+      meta:
+          result.matchType == PatientLookupMatchType.phone
+              ? 'Phone match'
+              : 'Patient record',
       icon: Icons.person_outline,
     );
-  }
-
-  Future<List<Map<String, dynamic>>> _queryPatientsByPrefix({
-    required String primaryField,
-    required String fallbackField,
-    required String prefix,
-    required int limit,
-  }) async {
-    final client = maybeSupabaseClient;
-    if (client == null) return const [];
-
-    final pattern = '$prefix%';
-    try {
-      final response = await client
-          .from('patients')
-          .select()
-          .ilike(primaryField, pattern)
-          .limit(limit);
-      return (response as List)
-          .map((row) => Map<String, dynamic>.from(row as Map))
-          .toList();
-    } catch (_) {}
-
-    try {
-      final response = await client
-          .from('patients')
-          .select()
-          .ilike(fallbackField, pattern)
-          .limit(limit);
-      return (response as List)
-          .map((row) => Map<String, dynamic>.from(row as Map))
-          .toList();
-    } catch (_) {}
-
-    final response = await client.from('patients').select().limit(250);
-    return (response as List)
-        .map((row) => Map<String, dynamic>.from(row as Map))
-        .toList();
-  }
-
-  String _normalizePhone(dynamic value) {
-    if (value == null) return '';
-    return value.toString().replaceAll(RegExp(r'[^0-9]'), '');
-  }
-
-  String _collectSearchableText(Map<String, dynamic> data) {
-    final buffer = StringBuffer();
-    final fields = [
-      data['name'],
-      data['surname'],
-      data['phone'],
-      data['city'],
-      data['email'],
-    ];
-    for (final field in fields) {
-      if (field == null) continue;
-      buffer.write(field.toString().toLowerCase());
-      buffer.write(' ');
-    }
-    return buffer.toString();
   }
 
   @override
@@ -347,13 +219,10 @@ class _SearchContentState extends State<_SearchContent> {
           onAction: () => Navigator.of(context).pop(),
         ),
         const SizedBox(height: 32),
-        // РџРѕР»Рµ РІРІРѕРґР° РїРѕРёСЃРєР°
         TextField(
           controller: _searchController,
           style: const TextStyle(color: AppColors.textPrimary),
-          onChanged: (value) {
-            _performSearch(value);
-          },
+          onChanged: _performSearch,
           decoration: InputDecoration(
             hintText: 'Enter surname or phone...',
             hintStyle: TextStyle(color: AppColors.textMuted.withOpacity(0.8)),
@@ -391,14 +260,13 @@ class _SearchContentState extends State<_SearchContent> {
           ),
         ),
         const SizedBox(height: 28),
-        // РљРѕРЅС‚РµРЅС‚ РїРѕРґ СЃС‚СЂРѕРєРѕР№ РїРѕРёСЃРєР°
         if (_searchController.text.isEmpty) ...[
           if (_isLoadingRecent)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: LinearProgressIndicator(
                 minHeight: 4,
-                valueColor: AlwaysStoppedAnimation(AppColors.accent),
+                valueColor: const AlwaysStoppedAnimation(AppColors.accent),
                 backgroundColor: Colors.white.withOpacity(0.08),
               ),
             )
@@ -454,11 +322,10 @@ class _SearchContentState extends State<_SearchContent> {
                     'Invoices',
                     'Notes',
                     'Upcoming',
-                  ].map((label) => _buildFilterChip(label)).toList(),
+                  ].map(_buildFilterChip).toList(),
             ),
           ],
         ] else ...[
-          // Р РµР·СѓР»СЊС‚Р°С‚С‹ РїРѕРёСЃРєР°
           Row(
             children: [
               Text(
@@ -490,7 +357,7 @@ class _SearchContentState extends State<_SearchContent> {
                   ),
                   child: Text(
                     '${_results.length} found',
-                    style: TextStyle(
+                    style: const TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
                       color: AppColors.bg,
@@ -517,7 +384,10 @@ class _SearchContentState extends State<_SearchContent> {
               ),
             ),
           ..._results.map(
-            (r) => _SearchResultTile(result: r, onTap: () => _openPatient(r)),
+            (result) => _SearchResultTile(
+              result: result,
+              onTap: () => _openPatient(result),
+            ),
           ),
         ],
       ],
@@ -575,6 +445,7 @@ class _SearchResultTile extends StatelessWidget {
   final VoidCallback? onTap;
 
   const _SearchResultTile({required this.result, this.onTap});
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
@@ -601,10 +472,11 @@ class _SearchResultTile extends StatelessWidget {
             ),
           ],
         ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isCompact = constraints.maxWidth < 520;
+            final leading = Container(
+              padding: EdgeInsets.all(isCompact ? 10 : 12),
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   colors: [
@@ -612,41 +484,85 @@ class _SearchResultTile extends StatelessWidget {
                     AppColors.accent.withOpacity(0.9),
                   ],
                 ),
-                borderRadius: BorderRadius.circular(18),
+                borderRadius: BorderRadius.circular(isCompact ? 16 : 18),
                 border: Border.all(color: Colors.white.withOpacity(0.2)),
               ),
-              child: Icon(result.icon, size: 24, color: AppColors.bg),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
+              child: Icon(
+                result.icon,
+                size: isCompact ? 20 : 24,
+                color: AppColors.bg,
+              ),
+            );
+
+            final textBlock = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  result.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  result.subtitle,
+                  maxLines: isCompact ? 2 : 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 13, color: AppColors.textMuted),
+                ),
+              ],
+            );
+
+            if (isCompact) {
+              return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    result.title,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
-                    ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      leading,
+                      const SizedBox(width: 12),
+                      Expanded(child: textBlock),
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    result.subtitle,
-                    style: TextStyle(fontSize: 13, color: AppColors.textMuted),
-                  ),
+                  const SizedBox(height: 12),
+                  _buildMetaBadge(),
                 ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Text(
-              result.meta,
-              style: TextStyle(
-                fontSize: 12,
-                color: AppColors.textMuted.withOpacity(0.9),
-              ),
-            ),
-          ],
+              );
+            }
+
+            return Row(
+              children: [
+                leading,
+                const SizedBox(width: 16),
+                Expanded(child: textBlock),
+                const SizedBox(width: 12),
+                _buildMetaBadge(),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMetaBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Text(
+        result.meta,
+        style: TextStyle(
+          fontSize: 12,
+          color: AppColors.textMuted.withOpacity(0.9),
         ),
       ),
     );

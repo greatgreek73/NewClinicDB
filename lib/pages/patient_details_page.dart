@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/waitlist_stage.dart';
 import '../models/tooth_condition.dart';
@@ -6,6 +7,7 @@ import '../models/treatment_palette.dart';
 import '../services/dental_chart_repository.dart';
 import '../services/id_generator.dart';
 import '../services/patient_payment_service.dart';
+import '../services/patient_profile_service.dart';
 import '../services/supabase_client.dart';
 import '../services/treatment_data_service.dart';
 import '../services/waitlist_service.dart';
@@ -26,21 +28,34 @@ class PatientDetailsArgs {
 class PatientDetailsPage extends StatelessWidget {
   static const routeName = '/patient-details';
 
-  const PatientDetailsPage({Key? key}) : super(key: key);
+  final PatientProfileService? patientProfileService;
+
+  const PatientDetailsPage({Key? key, this.patientProfileService})
+    : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     final args =
         ModalRoute.of(context)?.settings.arguments as PatientDetailsArgs?;
 
-    return PrimaryPageScaffold(child: _PatientDetailsContent(args: args));
+    return PrimaryPageScaffold(
+      child: _PatientDetailsContent(
+        args: args,
+        patientProfileService: patientProfileService,
+      ),
+    );
   }
 }
 
 class _PatientDetailsContent extends StatefulWidget {
   final PatientDetailsArgs? args;
+  final PatientProfileService? patientProfileService;
 
-  const _PatientDetailsContent({Key? key, this.args}) : super(key: key);
+  const _PatientDetailsContent({
+    Key? key,
+    this.args,
+    this.patientProfileService,
+  }) : super(key: key);
 
   @override
   State<_PatientDetailsContent> createState() => _PatientDetailsContentState();
@@ -49,6 +64,7 @@ class _PatientDetailsContent extends StatefulWidget {
 class _PatientDetailsContentState extends State<_PatientDetailsContent> {
   final DentalChartRepository _chartRepository = DentalChartRepository();
   final WaitlistService _waitlistService = WaitlistService();
+  late final PatientProfileService _patientProfileService;
 
   ToothCondition? _selectedCondition;
   Stream<Map<String, ToothCondition>>? _chartStream;
@@ -57,10 +73,15 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
   String? _selectedTreatmentType;
   bool _isSavingWaitlist = false;
   bool _isSavingPayments = false;
+  bool _isSavingNotes = false;
+  bool _isSavingProfile = false;
+  bool _isDeletingPatient = false;
 
   @override
   void initState() {
     super.initState();
+    _patientProfileService =
+        widget.patientProfileService ?? const PatientProfileService();
     final patientId = widget.args?.patientId;
     if (patientId != null) {
       _rebuildTreatmentStreams(patientId);
@@ -105,6 +126,7 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
             final infoCard = _InfoCard(
               resolvedName: resolvedName,
               isLoadingName: isLoadingName,
+              patientData: data,
               patientId: patientId,
               initialWaitlist: initialWaitlist,
               isSavingWaitlist: _isSavingWaitlist,
@@ -127,6 +149,22 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
                       ? null
                       : (payment) =>
                           _handleDeletePayment(patientId, data, payment),
+              isSavingProfile: _isSavingProfile,
+              onEditProfile:
+                  patientId == null
+                      ? null
+                      : () => _handleEditProfile(patientId, data),
+              isDeletingPatient: _isDeletingPatient,
+              onDeletePatient:
+                  patientId == null
+                      ? null
+                      : () =>
+                          _handleDeletePatient(patientId, data, resolvedName),
+              isSavingNotes: _isSavingNotes,
+              onEditNotes:
+                  patientId == null
+                      ? null
+                      : () => _handleEditNotes(patientId, data),
             );
 
             final scheduleCard = _ScheduleCard(
@@ -173,17 +211,7 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
 
   Future<Map<String, dynamic>?> _loadPatient(String? patientId) async {
     if (patientId == null || patientId.isEmpty) return null;
-    final client = maybeSupabaseClient;
-    if (client == null) return null;
-
-    final response =
-        await client
-            .from('patients')
-            .select()
-            .eq('id', patientId)
-            .maybeSingle();
-    if (response == null) return null;
-    return Map<String, dynamic>.from(response as Map);
+    return _patientProfileService.loadPatient(patientId);
   }
 
   Widget _buildWaitlistSummary(
@@ -444,6 +472,203 @@ class _PatientDetailsContentState extends State<_PatientDetailsContent> {
       if (mounted) {
         setState(() {
           _isSavingPayments = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _handleEditNotes(
+    String patientId,
+    Map<String, dynamic>? data,
+  ) async {
+    if (_isSavingNotes) return;
+
+    final initialNotes = _readPatientText(data, 'notes') ?? '';
+    final draft = await showDialog<String>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => _EditPatientNotesDialog(initialValue: initialNotes),
+    );
+    if (draft == null) return;
+
+    await _saveNotes(patientId, draft);
+  }
+
+  Future<void> _handleEditProfile(
+    String patientId,
+    Map<String, dynamic>? data,
+  ) async {
+    if (_isSavingProfile) return;
+
+    final draft = await showDialog<PatientProfileDraft>(
+      context: context,
+      barrierDismissible: true,
+      builder:
+          (context) => _EditPatientProfileDialog(
+            initialName: _readPatientText(data, 'name') ?? '',
+            initialSurname: _readPatientText(data, 'surname') ?? '',
+            initialPhone: _readPatientText(data, 'phone') ?? '',
+            initialCity: _readPatientText(data, 'city') ?? '',
+            initialGender: _readPatientText(data, 'gender'),
+            initialAge: _parsePatientAge(data?['age']),
+            initialPhotoUrl: _readPatientText(data, 'photo_url') ?? '',
+          ),
+    );
+    if (draft == null) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      _isSavingProfile = true;
+    });
+
+    try {
+      await _patientProfileService.updatePatientProfile(patientId, draft);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Patient profile updated.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not update patient profile: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSavingProfile = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _handleDeletePatient(
+    String patientId,
+    Map<String, dynamic>? data,
+    String displayName,
+  ) async {
+    if (_isDeletingPatient) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      _isDeletingPatient = true;
+    });
+
+    PatientDeleteCheck deleteCheck;
+    try {
+      deleteCheck = await _patientProfileService.inspectDeleteDependencies(
+        patientId,
+        currentPatientData: data,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Could not inspect patient dependencies: $error'),
+        ),
+      );
+      setState(() {
+        _isDeletingPatient = false;
+      });
+      return;
+    }
+
+    if (!mounted) return;
+
+    if (deleteCheck.hasBlockingDependencies) {
+      setState(() {
+        _isDeletingPatient = false;
+      });
+      await showDialog<void>(
+        context: context,
+        builder:
+            (context) => _DeletePatientBlockedDialog(
+              patientName: displayName,
+              deleteCheck: deleteCheck,
+            ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder:
+          (context) => _ConfirmDeletePatientDialog(
+            patientName: displayName,
+            deleteCheck: deleteCheck,
+          ),
+    );
+    if (confirmed != true) {
+      if (mounted) {
+        setState(() {
+          _isDeletingPatient = false;
+        });
+      }
+      return;
+    }
+
+    try {
+      await _patientProfileService.deletePatient(
+        patientId,
+        removeWaitingRoomEntries: deleteCheck.willRemoveWaitingRoomEntries,
+      );
+      if (!mounted) return;
+      messenger.showSnackBar(const SnackBar(content: Text('Patient deleted.')));
+      Navigator.of(context).pop();
+    } catch (error) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not delete patient: $error')),
+      );
+      setState(() {
+        _isDeletingPatient = false;
+      });
+    }
+  }
+
+  Future<void> _saveNotes(String patientId, String notesDraft) async {
+    if (_isSavingNotes) return;
+
+    final client = maybeSupabaseClient;
+    if (client == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Supabase is not configured.')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isSavingNotes = true;
+    });
+
+    try {
+      final normalizedNotes = notesDraft.trim();
+
+      await client
+          .from('patients')
+          .update({
+            'notes': normalizedNotes.isEmpty ? null : normalizedNotes,
+            'last_updated': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('id', patientId);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            normalizedNotes.isEmpty ? 'Notes removed.' : 'Notes updated.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not update notes: $error')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSavingNotes = false;
         });
       }
     }
@@ -784,6 +1009,7 @@ class _WaitlistStageIcon extends StatelessWidget {
 class _InfoCard extends StatelessWidget {
   final String resolvedName;
   final bool isLoadingName;
+  final Map<String, dynamic>? patientData;
   final String? patientId;
   final WaitlistAssignment initialWaitlist;
   final bool isSavingWaitlist;
@@ -800,10 +1026,17 @@ class _InfoCard extends StatelessWidget {
   final Future<void> Function()? onAddPayment;
   final Future<void> Function(PatientPayment payment)? onEditPayment;
   final Future<void> Function(PatientPayment payment)? onDeletePayment;
+  final bool isSavingProfile;
+  final Future<void> Function()? onEditProfile;
+  final bool isDeletingPatient;
+  final Future<void> Function()? onDeletePatient;
+  final bool isSavingNotes;
+  final Future<void> Function()? onEditNotes;
 
   const _InfoCard({
     required this.resolvedName,
     required this.isLoadingName,
+    required this.patientData,
     required this.patientId,
     required this.initialWaitlist,
     required this.isSavingWaitlist,
@@ -815,10 +1048,28 @@ class _InfoCard extends StatelessWidget {
     required this.onAddPayment,
     required this.onEditPayment,
     required this.onDeletePayment,
+    required this.isSavingProfile,
+    required this.onEditProfile,
+    required this.isDeletingPatient,
+    required this.onDeletePatient,
+    required this.isSavingNotes,
+    required this.onEditNotes,
   });
 
   @override
   Widget build(BuildContext context) {
+    final profileLine = _buildPatientProfileLine(
+      patientData,
+      isLoading: isLoadingName,
+    );
+    final phone = _readPatientText(patientData, 'phone');
+    final city = _readPatientText(patientData, 'city');
+    final notes = _readPatientText(patientData, 'notes');
+    final detailRows = <Widget>[
+      if (phone != null) _buildContactRow(Icons.phone, phone),
+      if (city != null) _buildContactRow(Icons.location_on_outlined, city),
+    ];
+
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: buildSurfaceCardDecoration(glow: true),
@@ -853,9 +1104,7 @@ class _InfoCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      isLoadingName
-                          ? 'Loading patient profile...'
-                          : 'Member since 2019 - VIP Plan',
+                      profileLine,
                       style: TextStyle(
                         fontSize: 13,
                         color: AppColors.textMuted.withOpacity(0.9),
@@ -868,6 +1117,66 @@ class _InfoCard extends StatelessWidget {
                       isSaving: isSavingWaitlist,
                       waitlistService: waitlistService,
                       onStageSelect: onStageSelect,
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        TextButton.icon(
+                          onPressed:
+                              onEditProfile == null || isSavingProfile
+                                  ? null
+                                  : () => onEditProfile!(),
+                          style: TextButton.styleFrom(
+                            foregroundColor: AppColors.accent,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          icon: const Icon(Icons.edit_outlined, size: 18),
+                          label: Text(
+                            isSavingProfile ? 'Saving...' : 'Edit profile',
+                          ),
+                        ),
+                        TextButton.icon(
+                          onPressed:
+                              onDeletePatient == null || isDeletingPatient
+                                  ? null
+                                  : () => onDeletePatient!(),
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.redAccent,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          icon:
+                              isDeletingPatient
+                                  ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation(
+                                        Colors.redAccent,
+                                      ),
+                                    ),
+                                  )
+                                  : const Icon(
+                                    Icons.delete_outline_rounded,
+                                    size: 18,
+                                  ),
+                          label: Text(
+                            isDeletingPatient
+                                ? 'Checking...'
+                                : 'Delete patient',
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -886,29 +1195,61 @@ class _InfoCard extends StatelessWidget {
           const SizedBox(height: 20),
           Divider(color: Colors.white.withOpacity(0.1)),
           const SizedBox(height: 20),
-          Text(
-            'Contact & preferences',
-            style: TextStyle(
-              fontSize: 13,
-              color: AppColors.textMuted.withOpacity(0.9),
-            ),
+          Row(
+            children: [
+              Text(
+                'Contact & notes',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: AppColors.textMuted.withOpacity(0.9),
+                ),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                onPressed:
+                    onEditNotes == null || isSavingNotes
+                        ? null
+                        : () => onEditNotes!(),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.accent,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                icon: Icon(
+                  notes == null ? Icons.add_comment_outlined : Icons.edit_note,
+                  size: 18,
+                ),
+                label: Text(
+                  isSavingNotes
+                      ? 'Saving...'
+                      : notes == null
+                      ? 'Add note'
+                      : 'Edit note',
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 12),
-          _buildContactRow(Icons.phone, '+1 202 555 0124'),
-          const SizedBox(height: 8),
-          _buildContactRow(Icons.email_outlined, 'anna.petrova@email.com'),
-          const SizedBox(height: 8),
-          _buildContactRow(
-            Icons.location_on_outlined,
-            'Downtown branch - Room 2',
-          ),
+          if (detailRows.isEmpty)
+            Text(
+              'No contact details added yet.',
+              style: TextStyle(
+                fontSize: 13,
+                color: AppColors.textMuted.withOpacity(0.85),
+              ),
+            )
+          else
+            ..._withVerticalSpacing(detailRows, const SizedBox(height: 8)),
           const SizedBox(height: 20),
           Container(
             padding: const EdgeInsets.all(16),
             decoration: buildSurfaceCardDecoration(),
-            child: const Text(
-              'Notes: Prefers morning appointments. Allergic to penicillin. Interested in implant upgrade in Q1.',
-              style: TextStyle(
+            child: Text(
+              notes == null ? 'No notes added yet.' : notes,
+              style: const TextStyle(
                 fontSize: 13,
                 color: AppColors.textPrimary,
                 height: 1.4,
@@ -934,6 +1275,577 @@ class _InfoCard extends StatelessWidget {
       ],
     );
   }
+}
+
+class _EditPatientNotesDialog extends StatefulWidget {
+  final String initialValue;
+
+  const _EditPatientNotesDialog({required this.initialValue});
+
+  @override
+  State<_EditPatientNotesDialog> createState() =>
+      _EditPatientNotesDialogState();
+}
+
+class _EditPatientNotesDialogState extends State<_EditPatientNotesDialog> {
+  late final TextEditingController _controller;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialValue);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    if (_isSaving) return;
+    setState(() {
+      _isSaving = true;
+    });
+    Navigator.of(context).pop(_controller.text);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasInitialNotes = widget.initialValue.trim().isNotEmpty;
+    final maxDialogHeight = MediaQuery.sizeOf(context).height - 48;
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 620, maxHeight: maxDialogHeight),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                AppColors.accent.withOpacity(0.35),
+                AppColors.accentStrong.withOpacity(0.45),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(22),
+          ),
+          padding: const EdgeInsets.all(2),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.surface.withOpacity(0.98),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withOpacity(0.12)),
+            ),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        hasInitialNotes
+                            ? 'Edit patient notes'
+                            : 'Add patient notes',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        onPressed:
+                            _isSaving
+                                ? null
+                                : () => Navigator.of(context).pop(),
+                        icon: const Icon(
+                          Icons.close,
+                          color: AppColors.textMuted,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Use this field for complaints, reminders, treatment context, or anything the team should see in the patient card. Leave it empty to remove the note.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.45,
+                      color: AppColors.textMuted.withOpacity(0.9),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _controller,
+                    maxLines: 8,
+                    minLines: 6,
+                    textInputAction: TextInputAction.newline,
+                    decoration: buildFormInputDecoration(
+                      'Notes',
+                      hint: 'Type patient notes here',
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed:
+                            _isSaving
+                                ? null
+                                : () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                      const SizedBox(width: 10),
+                      ElevatedButton(
+                        onPressed: _isSaving ? null : _save,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.accentStrong,
+                          foregroundColor: AppColors.bg,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                        child: const Text('Save notes'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EditPatientProfileDialog extends StatefulWidget {
+  final String initialName;
+  final String initialSurname;
+  final String initialPhone;
+  final String initialCity;
+  final String? initialGender;
+  final int? initialAge;
+  final String initialPhotoUrl;
+
+  const _EditPatientProfileDialog({
+    required this.initialName,
+    required this.initialSurname,
+    required this.initialPhone,
+    required this.initialCity,
+    required this.initialGender,
+    required this.initialAge,
+    required this.initialPhotoUrl,
+  });
+
+  @override
+  State<_EditPatientProfileDialog> createState() =>
+      _EditPatientProfileDialogState();
+}
+
+class _EditPatientProfileDialogState extends State<_EditPatientProfileDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _nameController;
+  late final TextEditingController _surnameController;
+  late final TextEditingController _phoneController;
+  late final TextEditingController _cityController;
+  late final TextEditingController _ageController;
+  late final TextEditingController _photoUrlController;
+  String? _gender;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.initialName);
+    _surnameController = TextEditingController(text: widget.initialSurname);
+    _phoneController = TextEditingController(text: widget.initialPhone);
+    _cityController = TextEditingController(text: widget.initialCity);
+    _ageController = TextEditingController(
+      text: widget.initialAge?.toString() ?? '',
+    );
+    _photoUrlController = TextEditingController(text: widget.initialPhotoUrl);
+    _gender = widget.initialGender;
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _surnameController.dispose();
+    _phoneController.dispose();
+    _cityController.dispose();
+    _ageController.dispose();
+    _photoUrlController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    if (_isSaving) return;
+    if (!_formKey.currentState!.validate()) return;
+
+    final normalizedAge = _ageController.text.trim();
+    final age = normalizedAge.isEmpty ? null : int.parse(normalizedAge);
+
+    setState(() {
+      _isSaving = true;
+    });
+
+    Navigator.of(context).pop(
+      PatientProfileDraft(
+        name: _nameController.text,
+        surname: _surnameController.text,
+        phone: _phoneController.text,
+        city: _cityController.text,
+        gender: _gender,
+        age: age,
+        photoUrl: _photoUrlController.text,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final maxDialogHeight = MediaQuery.sizeOf(context).height - 48;
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 620, maxHeight: maxDialogHeight),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                AppColors.accent.withOpacity(0.35),
+                AppColors.accentStrong.withOpacity(0.45),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(22),
+          ),
+          padding: const EdgeInsets.all(2),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.surface.withOpacity(0.98),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withOpacity(0.12)),
+            ),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Text(
+                          'Edit patient profile',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          onPressed:
+                              _isSaving
+                                  ? null
+                                  : () => Navigator.of(context).pop(),
+                          icon: const Icon(
+                            Icons.close,
+                            color: AppColors.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _nameController,
+                      decoration: buildFormInputDecoration('Name'),
+                      validator: (value) {
+                        if ((value ?? '').trim().isEmpty) {
+                          return 'Name is required.';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _surnameController,
+                      decoration: buildFormInputDecoration('Surname'),
+                      validator: (value) {
+                        if ((value ?? '').trim().isEmpty) {
+                          return 'Surname is required.';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _phoneController,
+                      decoration: buildFormInputDecoration('Phone'),
+                      keyboardType: TextInputType.phone,
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _cityController,
+                      decoration: buildFormInputDecoration('City'),
+                    ),
+                    const SizedBox(height: 14),
+                    DropdownButtonFormField<String>(
+                      decoration: buildFormInputDecoration('Gender'),
+                      dropdownColor: AppColors.surfaceDark,
+                      value: _gender,
+                      style: const TextStyle(color: AppColors.textPrimary),
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'Мужской',
+                          child: Text('Мужской'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'Женский',
+                          child: Text('Женский'),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        setState(() {
+                          _gender = value;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _ageController,
+                      decoration: buildFormInputDecoration('Age'),
+                      keyboardType: TextInputType.number,
+                      validator: (value) {
+                        final normalized = (value ?? '').trim();
+                        if (normalized.isEmpty) {
+                          return null;
+                        }
+                        final parsed = int.tryParse(normalized);
+                        if (parsed == null || parsed <= 0) {
+                          return 'Age must be a positive number.';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _photoUrlController,
+                      decoration: buildFormInputDecoration('Photo URL'),
+                    ),
+                    const SizedBox(height: 18),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed:
+                              _isSaving
+                                  ? null
+                                  : () => Navigator.of(context).pop(),
+                          child: const Text('Cancel'),
+                        ),
+                        const SizedBox(width: 10),
+                        ElevatedButton(
+                          onPressed: _isSaving ? null : _save,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.accentStrong,
+                            foregroundColor: AppColors.bg,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                          ),
+                          child: const Text('Save profile'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DeletePatientBlockedDialog extends StatelessWidget {
+  final String patientName;
+  final PatientDeleteCheck deleteCheck;
+
+  const _DeletePatientBlockedDialog({
+    required this.patientName,
+    required this.deleteCheck,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: AppColors.surface,
+      title: const Text(
+        'Cannot delete patient',
+        style: TextStyle(color: AppColors.textPrimary),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '$patientName still has linked clinical or financial data.',
+            style: const TextStyle(color: AppColors.textPrimary, height: 1.4),
+          ),
+          const SizedBox(height: 12),
+          ...deleteCheck.blockingReasons.map(
+            (reason) => Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                '- $reason',
+                style: TextStyle(
+                  color: AppColors.textMuted.withOpacity(0.92),
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ),
+          if (deleteCheck.willRemoveWaitingRoomEntries) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Waiting room entries: ${deleteCheck.waitingRoomEntriesCount}. These can be removed automatically only after payments and treatments are cleared.',
+              style: TextStyle(
+                color: AppColors.textMuted.withOpacity(0.92),
+                height: 1.4,
+              ),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ConfirmDeletePatientDialog extends StatelessWidget {
+  final String patientName;
+  final PatientDeleteCheck deleteCheck;
+
+  const _ConfirmDeletePatientDialog({
+    required this.patientName,
+    required this.deleteCheck,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final waitingRoomMessage =
+        deleteCheck.willRemoveWaitingRoomEntries
+            ? '\n\nThis will also remove ${deleteCheck.waitingRoomEntriesCount} waiting room entr${deleteCheck.waitingRoomEntriesCount == 1 ? 'y' : 'ies'} linked to this patient.'
+            : '';
+
+    return AlertDialog(
+      backgroundColor: AppColors.surface,
+      title: const Text(
+        'Delete patient',
+        style: TextStyle(color: AppColors.textPrimary),
+      ),
+      content: Text(
+        'Delete $patientName permanently?$waitingRoomMessage',
+        style: const TextStyle(color: AppColors.textPrimary, height: 1.4),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+          child: const Text('Delete'),
+        ),
+      ],
+    );
+  }
+}
+
+String _buildPatientProfileLine(
+  Map<String, dynamic>? data, {
+  required bool isLoading,
+}) {
+  if (isLoading) {
+    return 'Loading patient profile...';
+  }
+
+  final parts = <String>[];
+  final gender = _readPatientText(data, 'gender');
+  if (gender != null) {
+    parts.add(gender);
+  }
+
+  final age = _parsePatientAge(data?['age']);
+  if (age != null) {
+    parts.add('$age y/o');
+  }
+
+  final updatedAt = _parsePatientDate(data?['last_updated']);
+  if (updatedAt != null) {
+    parts.add('Updated ${_formatDateLabel(updatedAt)}');
+  }
+
+  return parts.isEmpty ? 'Patient profile' : parts.join(' • ');
+}
+
+String? _readPatientText(Map<String, dynamic>? data, String key) {
+  final value = data?[key]?.toString().trim();
+  if (value == null || value.isEmpty || value.toLowerCase() == 'null') {
+    return null;
+  }
+  return value;
+}
+
+int? _parsePatientAge(dynamic raw) {
+  if (raw is int) return raw > 0 ? raw : null;
+  if (raw is num) {
+    final value = raw.toInt();
+    return value > 0 ? value : null;
+  }
+  final parsed = int.tryParse(raw?.toString() ?? '');
+  if (parsed == null || parsed <= 0) return null;
+  return parsed;
+}
+
+DateTime? _parsePatientDate(dynamic raw) {
+  if (raw == null) return null;
+  return DateTime.tryParse(raw.toString());
+}
+
+List<Widget> _withVerticalSpacing(List<Widget> widgets, Widget spacer) {
+  if (widgets.isEmpty) return const <Widget>[];
+  final spaced = <Widget>[];
+  for (var index = 0; index < widgets.length; index++) {
+    spaced.add(widgets[index]);
+    if (index != widgets.length - 1) {
+      spaced.add(spacer);
+    }
+  }
+  return spaced;
 }
 
 class _PaymentsSection extends StatelessWidget {
@@ -1631,6 +2543,7 @@ class _DentalChartSection extends StatelessWidget {
   final ValueChanged<String?>? onTreatmentTypeChange;
   final TreatmentPalette palette;
   final Set<String> selectedTeeth;
+  final bool showHeader;
 
   const _DentalChartSection({
     required this.plan,
@@ -1647,6 +2560,7 @@ class _DentalChartSection extends StatelessWidget {
     this.onTreatmentTypeChange,
     required this.palette,
     this.selectedTeeth = const {},
+    this.showHeader = true,
   });
 
   @override
@@ -1689,108 +2603,178 @@ class _DentalChartSection extends StatelessWidget {
     ];
     final displayPlan = _buildDisplayPlan([...upperJaw, ...lowerJaw]);
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(24),
-      decoration: buildSurfaceCardDecoration(glow: true),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 760;
+
+        return Container(
+          width: double.infinity,
+          padding: EdgeInsets.all(isCompact ? 16 : 24),
+          decoration: buildSurfaceCardDecoration(glow: true),
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Column(
+              if (showHeader && isCompact) ...[
+                Text(
+                  'Dental chart',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Tap a status to highlight specific treatments.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textMuted.withOpacity(0.9),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _DentalLegend(
+                  availableConditions: availableConditions,
+                  selectedCondition: selectedCondition,
+                  onChanged: onConditionChange,
+                  treatmentTypes: treatmentTypes,
+                  selectedTreatmentType: selectedTreatmentType,
+                  onTreatmentTypeChange: onTreatmentTypeChange,
+                  palette: palette,
+                ),
+              ] else if (showHeader)
+                Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Dental chart',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Dental chart',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Tap a status to highlight specific treatments.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: AppColors.textMuted.withOpacity(0.9),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Tap a status to highlight specific treatments.',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: AppColors.textMuted.withOpacity(0.9),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: _DentalLegend(
+                          availableConditions: availableConditions,
+                          selectedCondition: selectedCondition,
+                          onChanged: onConditionChange,
+                          treatmentTypes: treatmentTypes,
+                          selectedTreatmentType: selectedTreatmentType,
+                          onTreatmentTypeChange: onTreatmentTypeChange,
+                          palette: palette,
+                        ),
                       ),
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Align(
-                  alignment: Alignment.centerRight,
-                  child: _DentalLegend(
-                    availableConditions: availableConditions,
-                    selectedCondition: selectedCondition,
-                    onChanged: onConditionChange,
-                    treatmentTypes: treatmentTypes,
-                    selectedTreatmentType: selectedTreatmentType,
-                    onTreatmentTypeChange: onTreatmentTypeChange,
-                    palette: palette,
+              SizedBox(height: showHeader ? 8 : 0),
+              if (readOnly)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Select a patient to enable chart editing.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textMuted.withOpacity(0.85),
+                    ),
                   ),
                 ),
-              ),
+              if (error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    error!,
+                    style: const TextStyle(
+                      color: Colors.redAccent,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              if (isLoading)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: LinearProgressIndicator(
+                    minHeight: 4,
+                    valueColor: const AlwaysStoppedAnimation(AppColors.accent),
+                    backgroundColor: Colors.white.withOpacity(0.08),
+                  ),
+                ),
+              const SizedBox(height: 24),
+              if (isCompact)
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: SizedBox(
+                    width: 760,
+                    child: Column(
+                      children: [
+                        _ToothRow(
+                          labels: upperJaw,
+                          plan: displayPlan,
+                          toothTreatments: treatmentsByTooth,
+                          palette: palette,
+                          selectedTreatmentType: selectedTreatmentType,
+                          selectedTeeth: selectedTeeth,
+                          onToothTap: readOnly ? null : onToothTap,
+                        ),
+                        const SizedBox(height: 16),
+                        _ToothRow(
+                          labels: lowerJaw,
+                          plan: displayPlan,
+                          inverted: true,
+                          toothTreatments: treatmentsByTooth,
+                          palette: palette,
+                          selectedTreatmentType: selectedTreatmentType,
+                          selectedTeeth: selectedTeeth,
+                          onToothTap: readOnly ? null : onToothTap,
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              else ...[
+                _ToothRow(
+                  labels: upperJaw,
+                  plan: displayPlan,
+                  toothTreatments: treatmentsByTooth,
+                  palette: palette,
+                  selectedTreatmentType: selectedTreatmentType,
+                  selectedTeeth: selectedTeeth,
+                  onToothTap: readOnly ? null : onToothTap,
+                ),
+                const SizedBox(height: 16),
+                _ToothRow(
+                  labels: lowerJaw,
+                  plan: displayPlan,
+                  inverted: true,
+                  toothTreatments: treatmentsByTooth,
+                  palette: palette,
+                  selectedTreatmentType: selectedTreatmentType,
+                  selectedTeeth: selectedTeeth,
+                  onToothTap: readOnly ? null : onToothTap,
+                ),
+              ],
             ],
           ),
-          const SizedBox(height: 8),
-          if (readOnly)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                'Select a patient to enable chart editing.',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textMuted.withOpacity(0.85),
-                ),
-              ),
-            ),
-          if (error != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                error!,
-                style: const TextStyle(color: Colors.redAccent, fontSize: 12),
-              ),
-            ),
-          if (isLoading)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: LinearProgressIndicator(
-                minHeight: 4,
-                valueColor: const AlwaysStoppedAnimation(AppColors.accent),
-                backgroundColor: Colors.white.withOpacity(0.08),
-              ),
-            ),
-          const SizedBox(height: 24),
-          _ToothRow(
-            labels: upperJaw,
-            plan: displayPlan,
-            toothTreatments: treatmentsByTooth,
-            palette: palette,
-            selectedTreatmentType: selectedTreatmentType,
-            selectedTeeth: selectedTeeth,
-            onToothTap: readOnly ? null : onToothTap,
-          ),
-          const SizedBox(height: 16),
-          _ToothRow(
-            labels: lowerJaw,
-            plan: displayPlan,
-            inverted: true,
-            toothTreatments: treatmentsByTooth,
-            palette: palette,
-            selectedTreatmentType: selectedTreatmentType,
-            selectedTeeth: selectedTeeth,
-            onToothTap: readOnly ? null : onToothTap,
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -2296,11 +3280,26 @@ class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
   bool _typesLoading = true;
   String? _typesError;
   List<String> _types = [];
+  bool _phoneOrientationOverrideApplied = false;
 
   @override
   void initState() {
     super.initState();
     _loadTypes();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncPhoneOrientations();
+  }
+
+  @override
+  void dispose() {
+    if (_phoneOrientationOverrideApplied) {
+      SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    }
+    super.dispose();
   }
 
   Future<void> _loadTypes() async {
@@ -2332,6 +3331,25 @@ class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
           _typesLoading = false;
         });
       }
+    }
+  }
+
+  void _syncPhoneOrientations() {
+    final shortestSide = MediaQuery.sizeOf(context).shortestSide;
+    final shouldAllowLandscape = shortestSide < 600;
+    if (shouldAllowLandscape == _phoneOrientationOverrideApplied) {
+      return;
+    }
+
+    _phoneOrientationOverrideApplied = shouldAllowLandscape;
+    if (shouldAllowLandscape) {
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    } else {
+      SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     }
   }
 
@@ -2380,164 +3398,46 @@ class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final screenSize = MediaQuery.sizeOf(context);
+    final isCompact = screenSize.width < 760;
+    final isPhoneFullScreen = screenSize.shortestSide < 600;
+    final isLandscapePhone =
+        isPhoneFullScreen &&
+        MediaQuery.orientationOf(context) == Orientation.landscape;
+
+    if (isPhoneFullScreen) {
+      return Scaffold(
+        backgroundColor: AppColors.bg,
+        body: SafeArea(
+          child:
+              isLandscapePhone
+                  ? _buildLandscapePhoneChartLayout(context)
+                  : _buildDialogShell(
+                    context,
+                    isCompact: true,
+                    isFullScreen: true,
+                    showRotationHint: true,
+                  ),
+        ),
+      );
+    }
+
     return Dialog(
       backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: isCompact ? 8 : 24,
+        vertical: isCompact ? 8 : 24,
+      ),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(isCompact ? 18 : 22),
+      ),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1100),
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                AppColors.accent.withOpacity(0.35),
-                AppColors.accentStrong.withOpacity(0.45),
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(22),
-          ),
-          padding: const EdgeInsets.all(2),
-          child: Container(
-            decoration: BoxDecoration(
-              color: AppColors.surface.withOpacity(0.98),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.white.withOpacity(0.12)),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Text(
-                        'Add treatment',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        onPressed:
-                            _saving ? null : () => Navigator.of(context).pop(),
-                        icon: const Icon(
-                          Icons.close,
-                          color: AppColors.textMuted,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  _buildTypeSelector(),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    height: 520,
-                    child: _DentalChartSection(
-                      // Empty chart: do not reflect patient's current statuses
-                      plan: const <String, ToothCondition>{},
-                      selectedCondition: null,
-                      // Passing only treated hides condition chips in legend
-                      availableConditions: const [ToothCondition.treated],
-                      onConditionChange: (_) {},
-                      onToothTap: (t) => _toggleTooth(t),
-                      isLoading: false,
-                      error: null,
-                      treatmentsByTooth: const {},
-                      treatmentTypes: _types,
-                      selectedTreatmentType: _selectedType,
-                      onTreatmentTypeChange:
-                          (t) => setState(() {
-                            _selectedType = t;
-                          }),
-                      palette: _palette,
-                      selectedTeeth: _selectedTeeth,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  if (_selectedTeeth.isNotEmpty)
-                    Builder(
-                      builder: (context) {
-                        final list = _selectedTeeth.toList()..sort();
-                        return Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children:
-                              list
-                                  .map(
-                                    (t) => Chip(
-                                      label: Text('Tooth $t'),
-                                      deleteIcon: const Icon(
-                                        Icons.close,
-                                        size: 16,
-                                      ),
-                                      onDeleted:
-                                          _saving
-                                              ? null
-                                              : () => _toggleTooth(t),
-                                    ),
-                                  )
-                                  .toList(),
-                        );
-                      },
-                    ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          _selectedType == null
-                              ? 'Select a treatment type'
-                              : 'Type: ${_selectedType!}',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.textMuted.withOpacity(0.9),
-                          ),
-                        ),
-                      ),
-                      TextButton(
-                        onPressed:
-                            _saving ? null : () => Navigator.of(context).pop(),
-                        child: const Text('Cancel'),
-                      ),
-                      const SizedBox(width: 8),
-                      ElevatedButton.icon(
-                        onPressed:
-                            _saving ||
-                                    _selectedType == null ||
-                                    _selectedTeeth.isEmpty
-                                ? null
-                                : _save,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.accent,
-                          foregroundColor: AppColors.bg,
-                        ),
-                        icon:
-                            _saving
-                                ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation(
-                                      AppColors.bg,
-                                    ),
-                                  ),
-                                )
-                                : const Icon(Icons.check),
-                        label: const Text('Save'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
+        constraints: BoxConstraints(
+          maxWidth: isCompact ? screenSize.width : 1100,
+          maxHeight:
+              isCompact ? screenSize.height - 16 : screenSize.height * 0.92,
         ),
+        child: _buildDialogShell(context, isCompact: isCompact),
       ),
     );
   }
@@ -2558,6 +3458,58 @@ class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
           fontSize: 12,
           color: AppColors.textMuted.withOpacity(0.9),
         ),
+      );
+    }
+
+    if (MediaQuery.sizeOf(context).width < 760) {
+      return DropdownButtonFormField<String>(
+        value: _selectedType,
+        isExpanded: true,
+        decoration: InputDecoration(
+          labelText: 'Treatment type',
+          labelStyle: TextStyle(color: AppColors.textMuted.withOpacity(0.9)),
+          filled: true,
+          fillColor: Colors.white.withOpacity(0.04),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: Colors.white.withOpacity(0.08)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: Colors.white.withOpacity(0.08)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: AppColors.accent.withOpacity(0.65)),
+          ),
+        ),
+        dropdownColor: AppColors.surfaceDark,
+        iconEnabledColor: AppColors.textPrimary,
+        hint: const Text(
+          'Select treatment type',
+          style: TextStyle(color: AppColors.textMuted),
+        ),
+        items:
+            _types
+                .map(
+                  (type) => DropdownMenuItem<String>(
+                    value: type,
+                    child: Text(
+                      type,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: AppColors.textPrimary),
+                    ),
+                  ),
+                )
+                .toList(),
+        onChanged:
+            _saving
+                ? null
+                : (value) {
+                  setState(() {
+                    _selectedType = value;
+                  });
+                },
       );
     }
 
@@ -2596,6 +3548,323 @@ class _AddTreatmentDialogState extends State<_AddTreatmentDialog> {
               }).toList(),
         ),
       ],
+    );
+  }
+
+  Widget _buildDialogShell(
+    BuildContext context, {
+    required bool isCompact,
+    bool isFullScreen = false,
+    bool showRotationHint = false,
+  }) {
+    final outerRadius = isFullScreen ? 0.0 : (isCompact ? 18.0 : 22.0);
+    final innerRadius = isFullScreen ? 0.0 : (isCompact ? 16.0 : 20.0);
+
+    final shell = Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppColors.accent.withOpacity(0.35),
+            AppColors.accentStrong.withOpacity(0.45),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(outerRadius),
+      ),
+      padding: const EdgeInsets.all(2),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.surface.withOpacity(0.98),
+          borderRadius: BorderRadius.circular(innerRadius),
+          border: Border.all(color: Colors.white.withOpacity(0.12)),
+        ),
+        child: Padding(
+          padding: EdgeInsets.all(isCompact ? 14 : 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.max,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Text(
+                    'Add treatment',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    onPressed:
+                        _saving ? null : () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close, color: AppColors.textMuted),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _buildTypeSelector(),
+              const SizedBox(height: 12),
+              if (isCompact)
+                Text(
+                  'Select a treatment type, then tap the teeth below.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textMuted.withOpacity(0.9),
+                  ),
+                ),
+              if (showRotationHint) ...[
+                const SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white.withOpacity(0.08)),
+                  ),
+                  child: Text(
+                    'Rotate your phone to landscape to see the full dental chart on one screen.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textMuted.withOpacity(0.92),
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Expanded(
+                child: _DentalChartSection(
+                  plan: const <String, ToothCondition>{},
+                  selectedCondition: null,
+                  availableConditions: const [ToothCondition.treated],
+                  onConditionChange: (_) {},
+                  onToothTap: (t) => _toggleTooth(t),
+                  isLoading: false,
+                  error: null,
+                  treatmentsByTooth: const {},
+                  treatmentTypes: _types,
+                  selectedTreatmentType: _selectedType,
+                  onTreatmentTypeChange:
+                      (t) => setState(() {
+                        _selectedType = t;
+                      }),
+                  palette: _palette,
+                  selectedTeeth: _selectedTeeth,
+                ),
+              ),
+              const SizedBox(height: 12),
+              _buildSelectedTeethSummary(isCompact: isCompact),
+              const SizedBox(height: 10),
+              if (isCompact)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      _selectedType == null
+                          ? 'Select a treatment type'
+                          : 'Type: ${_selectedType!}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textMuted.withOpacity(0.9),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextButton(
+                            onPressed:
+                                _saving
+                                    ? null
+                                    : () => Navigator.of(context).pop(),
+                            child: const Text('Cancel'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(child: _buildSaveButton()),
+                      ],
+                    ),
+                  ],
+                )
+              else
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _selectedType == null
+                            ? 'Select a treatment type'
+                            : 'Type: ${_selectedType!}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textMuted.withOpacity(0.9),
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed:
+                          _saving ? null : () => Navigator.of(context).pop(),
+                      child: const Text('Cancel'),
+                    ),
+                    const SizedBox(width: 8),
+                    _buildSaveButton(),
+                  ],
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (isFullScreen) {
+      return SizedBox.expand(child: shell);
+    }
+
+    return shell;
+  }
+
+  Widget _buildLandscapePhoneChartLayout(BuildContext context) {
+    return Container(
+      color: AppColors.bg,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+            child: Row(
+              children: [
+                IconButton(
+                  onPressed: _saving ? null : () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close, color: AppColors.textMuted),
+                ),
+                const SizedBox(width: 4),
+                Expanded(flex: 4, child: _buildTypeSelector()),
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 3,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.05),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white.withOpacity(0.08)),
+                    ),
+                    child: Text(
+                      _selectedTeeth.isEmpty
+                          ? 'Tap teeth to select'
+                          : 'Selected: ${(_selectedTeeth.toList()..sort()).join(', ')}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textMuted.withOpacity(0.92),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                _buildSaveButton(),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+              child: _DentalChartSection(
+                plan: const <String, ToothCondition>{},
+                selectedCondition: null,
+                availableConditions: const [ToothCondition.treated],
+                onConditionChange: (_) {},
+                onToothTap: (t) => _toggleTooth(t),
+                isLoading: false,
+                error: null,
+                readOnly: false,
+                treatmentsByTooth: const {},
+                treatmentTypes: const [],
+                selectedTreatmentType: null,
+                onTreatmentTypeChange: null,
+                palette: _palette,
+                selectedTeeth: _selectedTeeth,
+                showHeader: false,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSelectedTeethSummary({required bool isCompact}) {
+    if (_selectedTeeth.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final list = _selectedTeeth.toList()..sort();
+    if (isCompact) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withOpacity(0.08)),
+        ),
+        child: Text(
+          'Selected teeth: ${list.join(', ')}',
+          style: TextStyle(
+            fontSize: 12,
+            color: AppColors.textMuted.withOpacity(0.92),
+          ),
+        ),
+      );
+    }
+
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children:
+          list
+              .map(
+                (t) => Chip(
+                  label: Text('Tooth $t'),
+                  deleteIcon: const Icon(Icons.close, size: 16),
+                  onDeleted: _saving ? null : () => _toggleTooth(t),
+                ),
+              )
+              .toList(),
+    );
+  }
+
+  Widget _buildSaveButton() {
+    return ElevatedButton.icon(
+      onPressed:
+          _saving || _selectedType == null || _selectedTeeth.isEmpty
+              ? null
+              : _save,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: AppColors.accent,
+        foregroundColor: AppColors.bg,
+      ),
+      icon:
+          _saving
+              ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation(AppColors.bg),
+                ),
+              )
+              : const Icon(Icons.check),
+      label: const Text('Save'),
     );
   }
 }

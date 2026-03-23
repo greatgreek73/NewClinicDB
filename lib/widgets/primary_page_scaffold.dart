@@ -8,11 +8,13 @@ import '../utils/decorations.dart';
 class PrimaryPageScaffold extends StatelessWidget {
   final Widget child;
   final EdgeInsets padding;
+  final bool scrollable;
 
   const PrimaryPageScaffold({
     super.key,
     required this.child,
     this.padding = const EdgeInsets.all(36),
+    this.scrollable = true,
   });
 
   @override
@@ -38,18 +40,22 @@ class PrimaryPageScaffold extends StatelessWidget {
           ),
           child: LayoutBuilder(
             builder: (context, constraints) {
-              return SingleChildScrollView(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                  child: Container(
-                    width: double.infinity,
-                    decoration: buildPrimaryPanelDecoration(),
-                    child: SafeArea(
-                      child: Padding(padding: padding, child: child),
-                    ),
+              final content = ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: Container(
+                  width: double.infinity,
+                  decoration: buildPrimaryPanelDecoration(),
+                  child: SafeArea(
+                    child: Padding(padding: padding, child: child),
                   ),
                 ),
               );
+
+              if (!scrollable) {
+                return content;
+              }
+
+              return SingleChildScrollView(child: content);
             },
           ),
         ),

@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_route_observer.dart';
+import '../models/appointment.dart';
 import '../models/waitlist_stage.dart';
+import '../services/appointment_service.dart';
 import '../services/daily_revenue_service.dart';
 import '../services/supabase_client.dart';
 import '../theme/app_colors.dart';
@@ -14,10 +16,20 @@ import '../services/waitlist_service.dart';
 import 'add_patient_page.dart';
 import 'patient_3d_graph_page.dart';
 import 'patient_details_page.dart';
+import 'schedule_page.dart';
 import 'search_page.dart';
+import 'stats_page.dart';
+import 'waiting_room_page.dart';
 
 class ClinicDashboardPage extends StatefulWidget {
-  const ClinicDashboardPage({Key? key}) : super(key: key);
+  final WaitlistService? waitlistService;
+  final AppointmentService? appointmentService;
+
+  const ClinicDashboardPage({
+    Key? key,
+    this.waitlistService,
+    this.appointmentService,
+  }) : super(key: key);
 
   @override
   State<ClinicDashboardPage> createState() => _ClinicDashboardPageState();
@@ -26,13 +38,14 @@ class ClinicDashboardPage extends StatefulWidget {
 class _ClinicDashboardPageState extends State<ClinicDashboardPage>
     with RouteAware {
   bool isToday = true;
-  bool _isLoadingPatients = false;
-  int? _todayPatientsCount;
-  String? _patientsError;
+  bool _isLoadingAppointments = false;
+  String? _appointmentsError;
+  List<Appointment> _todayAppointments = const <Appointment>[];
   bool _isLoadingRevenue = false;
   double? _todayRevenue;
   String? _revenueError;
-  final WaitlistService _waitlistService = WaitlistService();
+  late final WaitlistService _waitlistService;
+  late final AppointmentService _appointmentService;
   late final Stream<List<WaitlistEntry>> _waitlistEntriesStream;
   ModalRoute<dynamic>? _subscribedRoute;
   Timer? _dashboardClockTimer;
@@ -40,6 +53,9 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
   @override
   void initState() {
     super.initState();
+    _waitlistService = widget.waitlistService ?? WaitlistService();
+    _appointmentService =
+        widget.appointmentService ?? const AppointmentService();
     _waitlistEntriesStream = _waitlistService.watchAllWaitlistEntries();
     _loadTodayDashboardMetrics();
     _startDashboardClock();
@@ -79,6 +95,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
       if (!mounted) return;
       final now = DateTime.now();
       if (now.minute == 0) {
+        _loadTodayAppointments();
         _loadTodayRevenue();
         return;
       }
@@ -87,58 +104,31 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
   }
 
   void _loadTodayDashboardMetrics() {
-    _loadTodayPatientsCount();
+    _loadTodayAppointments();
     _loadTodayRevenue();
   }
 
-  Future<void> _loadTodayPatientsCount() async {
+  Future<void> _loadTodayAppointments() async {
     setState(() {
-      _isLoadingPatients = true;
-      _patientsError = null;
+      _isLoadingAppointments = true;
+      _appointmentsError = null;
     });
 
     try {
-      final client = maybeSupabaseClient;
-      if (client == null) {
-        setState(() {
-          _patientsError = 'Supabase is not configured';
-          _todayPatientsCount = null;
-        });
-        return;
-      }
-
-      final now = DateTime.now();
-      final startOfDay = DateTime(now.year, now.month, now.day);
-      final endOfDay = startOfDay.add(const Duration(days: 1));
-
-      final snapshot = await client
-          .from('treatments')
-          .select('id,patient_id,date')
-          .gte('date', startOfDay.toUtc().toIso8601String())
-          .lt('date', endOfDay.toUtc().toIso8601String());
-
-      final uniquePatients = <String>{};
-      for (final item in (snapshot as List)) {
-        final data = Map<String, dynamic>.from(item as Map);
-        final rawId = data['patient_id'];
-        final id = rawId?.toString().trim();
-        final fallbackId = (data['id'] ?? '').toString().trim();
-        uniquePatients.add(id?.isNotEmpty == true ? id! : fallbackId);
-      }
-
+      final appointments = await _appointmentService.listByDay(DateTime.now());
       setState(() {
-        _todayPatientsCount = uniquePatients.length;
-        _patientsError = null;
+        _todayAppointments = appointments;
+        _appointmentsError = null;
       });
     } catch (error) {
       setState(() {
-        _patientsError = 'Unable to load';
-        _todayPatientsCount = null;
+        _appointmentsError = 'Unable to load';
+        _todayAppointments = const <Appointment>[];
       });
     } finally {
       if (mounted) {
         setState(() {
-          _isLoadingPatients = false;
+          _isLoadingAppointments = false;
         });
       }
     }
@@ -206,19 +196,51 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
   }
 
   String get _patientsCardValue {
-    if (_isLoadingPatients) return '…';
-    if (_patientsError != null) return '--';
-    return (_todayPatientsCount ?? 0).toString();
+    if (_isLoadingAppointments) return '…';
+    if (_appointmentsError != null) return '--';
+    return _todayPatientIds.length.toString();
   }
 
   String get _patientsCardSubtitle {
-    if (_isLoadingPatients) {
+    if (_isLoadingAppointments) {
       return 'Loading today\'s data…';
     }
-    if (_patientsError != null) {
-      return 'Check appointments data';
+    if (_appointmentsError != null) {
+      return 'Check schedule data';
     }
-    return 'Any treatment logged today';
+    return 'Patients scheduled today';
+  }
+
+  String get _upcomingCardValue {
+    if (_isLoadingAppointments) return '…';
+    if (_appointmentsError != null) return '--';
+    return _upcomingAppointments.length.toString();
+  }
+
+  String get _upcomingCardSubtitle {
+    if (_isLoadingAppointments) {
+      return 'Loading schedule…';
+    }
+    if (_appointmentsError != null) {
+      return 'Check schedule data';
+    }
+    return 'Still scheduled later today';
+  }
+
+  String get _cancelledCardValue {
+    if (_isLoadingAppointments) return '…';
+    if (_appointmentsError != null) return '--';
+    return _cancelledAppointments.length.toString();
+  }
+
+  String get _cancelledCardSubtitle {
+    if (_isLoadingAppointments) {
+      return 'Loading schedule…';
+    }
+    if (_appointmentsError != null) {
+      return 'Check schedule data';
+    }
+    return 'No-shows: ${_noShowAppointments.length}';
   }
 
   String get _revenueCardValue {
@@ -240,6 +262,41 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
       return 'Workday starts at 08:15';
     }
     return 'Earned/hour today: ${_formatCurrency(pace)}';
+  }
+
+  Set<String> get _todayPatientIds {
+    return _todayAppointments
+        .map((appointment) => appointment.patientId)
+        .toSet();
+  }
+
+  List<Appointment> get _scheduledAppointments {
+    return _todayAppointments
+        .where(
+          (appointment) => appointment.status == AppointmentStatus.scheduled,
+        )
+        .toList();
+  }
+
+  List<Appointment> get _upcomingAppointments {
+    final now = DateTime.now();
+    return _scheduledAppointments
+        .where((appointment) => appointment.startAt.isAfter(now))
+        .toList();
+  }
+
+  List<Appointment> get _cancelledAppointments {
+    return _todayAppointments
+        .where(
+          (appointment) => appointment.status == AppointmentStatus.cancelled,
+        )
+        .toList();
+  }
+
+  List<Appointment> get _noShowAppointments {
+    return _todayAppointments
+        .where((appointment) => appointment.status == AppointmentStatus.noShow)
+        .toList();
   }
 
   @override
@@ -300,7 +357,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
         children: [
           Expanded(flex: 11, child: _buildLeftColumn(context)),
           const SizedBox(width: 32),
-          Expanded(flex: 10, child: _buildRightColumn()),
+          Expanded(flex: 10, child: _buildRightColumn(context)),
         ],
       ),
     );
@@ -313,7 +370,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
         children: [
           _buildLeftColumn(context),
           const SizedBox(height: 24),
-          _buildRightColumn(),
+          _buildRightColumn(context),
         ],
       ),
     );
@@ -382,6 +439,26 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
           onPressed:
               () =>
                   Navigator.of(context).pushNamed(PatientDetailsPage.routeName),
+        ),
+        _buildActionButton(
+          context: context,
+          label: 'Statistics',
+          icon: Icons.analytics_outlined,
+          onPressed: () => Navigator.of(context).pushNamed(StatsPage.routeName),
+        ),
+        _buildActionButton(
+          context: context,
+          label: 'Schedule',
+          icon: Icons.calendar_today_outlined,
+          onPressed:
+              () => Navigator.of(context).pushNamed(SchedulePage.routeName),
+        ),
+        _buildActionButton(
+          context: context,
+          label: 'Waiting room',
+          icon: Icons.meeting_room_outlined,
+          onPressed:
+              () => Navigator.of(context).pushNamed(WaitingRoomPage.routeName),
         ),
         if (!isFlutterTest)
           _buildActionButton(
@@ -489,11 +566,15 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
           highlighted: true,
         ),
         _buildStatCard(
-          title: 'Completed',
-          value: '12',
-          subtitle: '3 in progress',
+          title: 'Upcoming',
+          value: _upcomingCardValue,
+          subtitle: _upcomingCardSubtitle,
         ),
-        _buildStatCard(title: 'Canceled', value: '2', subtitle: 'No-shows: 1'),
+        _buildStatCard(
+          title: 'Canceled',
+          value: _cancelledCardValue,
+          subtitle: _cancelledCardSubtitle,
+        ),
         _buildStatCard(
           title: 'Revenue today',
           value: _revenueCardValue,
@@ -729,7 +810,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
     );
   }
 
-  Widget _buildRightColumn() {
+  Widget _buildRightColumn(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -773,7 +854,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
               children: [
                 _buildRightHeader(),
                 const SizedBox(height: 24),
-                _buildAppointmentCard(),
+                _buildAppointmentCard(context),
               ],
             ),
           ),
@@ -783,6 +864,8 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
   }
 
   Widget _buildRightHeader() {
+    final scheduledCount = _scheduledAppointments.length;
+
     return Row(
       children: [
         Expanded(
@@ -799,7 +882,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
               ),
               const SizedBox(height: 8),
               const Text(
-                'Next patients',
+                'Today agenda',
                 style: TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.w600,
@@ -827,7 +910,9 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
               ),
               const SizedBox(width: 8),
               Text(
-                'Today, 09:00–18:00',
+                scheduledCount == 0
+                    ? 'Today'
+                    : 'Today, $scheduledCount scheduled',
                 style: TextStyle(fontSize: 12, color: AppColors.textMuted),
               ),
             ],
@@ -837,7 +922,97 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
     );
   }
 
-  Widget _buildAppointmentCard() {
+  Widget _buildAppointmentCard(BuildContext context) {
+    if (_isLoadingAppointments && _todayAppointments.isEmpty) {
+      return Container(
+        decoration: BoxDecoration(
+          color: AppColors.surfaceDark.withOpacity(0.9),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: Colors.white.withOpacity(0.14)),
+        ),
+        padding: const EdgeInsets.all(18),
+        child: LinearProgressIndicator(
+          minHeight: 4,
+          valueColor: const AlwaysStoppedAnimation(AppColors.accent),
+          backgroundColor: Colors.white.withOpacity(0.08),
+        ),
+      );
+    }
+
+    if (_appointmentsError != null) {
+      return Container(
+        decoration: BoxDecoration(
+          color: AppColors.surfaceDark.withOpacity(0.9),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: Colors.white.withOpacity(0.14)),
+        ),
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Schedule unavailable',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _appointmentsError!,
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.5,
+                color: AppColors.textMuted.withOpacity(0.9),
+              ),
+            ),
+            const SizedBox(height: 16),
+            _buildOpenScheduleRow(context),
+          ],
+        ),
+      );
+    }
+
+    if (_todayAppointments.isEmpty) {
+      return Container(
+        decoration: BoxDecoration(
+          color: AppColors.surfaceDark.withOpacity(0.9),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: Colors.white.withOpacity(0.14)),
+        ),
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'No appointments yet',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Today has no stored visits yet. Use the schedule page to start building the clinic agenda.',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.5,
+                color: AppColors.textMuted.withOpacity(0.9),
+              ),
+            ),
+            const SizedBox(height: 16),
+            _buildOpenScheduleRow(context),
+          ],
+        ),
+      );
+    }
+
+    final visibleAppointments = _todayAppointments.take(5).toList();
+    final nextAppointmentId =
+        _upcomingAppointments.isEmpty ? null : _upcomingAppointments.first.id;
+
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surfaceDark.withOpacity(0.9),
@@ -847,51 +1022,50 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
       padding: const EdgeInsets.all(18),
       child: Column(
         children: [
-          _buildAppointmentItem(
-            time: '09:00',
-            name: 'John Smith',
-            procedure: 'Implant consultation',
-            room: 'Room 2',
-            important: true,
-          ),
-          const SizedBox(height: 12),
-          _buildAppointmentItem(
-            time: '10:30',
-            name: 'Anna Petrova',
-            procedure: 'Routine check-up & hygiene',
-            room: 'Room 1',
-          ),
-          const SizedBox(height: 12),
-          _buildAppointmentItem(
-            time: '12:00',
-            name: 'Mark Ivanov',
-            procedure: 'Root canal treatment',
-            room: 'Room 3',
-          ),
+          ...List.generate(visibleAppointments.length, (index) {
+            final appointment = visibleAppointments[index];
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: index == visibleAppointments.length - 1 ? 0 : 12,
+              ),
+              child: _buildAppointmentItem(
+                appointment: appointment,
+                highlight: appointment.id == nextAppointmentId,
+              ),
+            );
+          }),
           const SizedBox(height: 18),
           Divider(color: Colors.white.withOpacity(0.12)),
           const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'View full schedule in clinic system',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textMuted.withOpacity(0.9),
-                  ),
-                ),
+          _buildOpenScheduleRow(context),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOpenScheduleRow(BuildContext context) {
+    return InkWell(
+      onTap: () => Navigator.of(context).pushNamed(SchedulePage.routeName),
+      borderRadius: BorderRadius.circular(14),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              'View full schedule in clinic system',
+              style: TextStyle(
+                fontSize: 12,
+                color: AppColors.textMuted.withOpacity(0.9),
               ),
-              Text(
-                'Open calendar',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: AppColors.accent,
-                  decoration: TextDecoration.underline,
-                  decorationColor: AppColors.accent,
-                ),
-              ),
-            ],
+            ),
+          ),
+          Text(
+            'Open calendar',
+            style: TextStyle(
+              fontSize: 12,
+              color: AppColors.accent,
+              decoration: TextDecoration.underline,
+              decorationColor: AppColors.accent,
+            ),
           ),
         ],
       ),
@@ -899,18 +1073,17 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
   }
 
   Widget _buildAppointmentItem({
-    required String time,
-    required String name,
-    required String procedure,
-    required String room,
-    bool important = false,
+    required Appointment appointment,
+    required bool highlight,
   }) {
+    final statusStyle = _dashboardAppointmentStatusStyle(appointment.status);
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors:
-              important
+              highlight
                   ? [
                     AppColors.surface.withOpacity(0.98),
                     AppColors.surfaceDark.withOpacity(0.95),
@@ -923,7 +1096,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
           color:
-              important
+              highlight
                   ? AppColors.accentSoft.withOpacity(0.9)
                   : Colors.white.withOpacity(0.12),
         ),
@@ -938,7 +1111,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
               border: Border.all(color: Colors.white.withOpacity(0.22)),
             ),
             child: Text(
-              time,
+              _formatDashboardTime(appointment.startAt),
               style: const TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
@@ -952,7 +1125,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  name,
+                  appointment.patientName,
                   style: const TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
@@ -961,7 +1134,7 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  procedure,
+                  _dashboardVisitLabel(appointment.visitLabel),
                   style: TextStyle(fontSize: 12, color: AppColors.textMuted),
                 ),
               ],
@@ -972,37 +1145,87 @@ class _ClinicDashboardPageState extends State<ClinicDashboardPage>
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                room,
+                (appointment.roomLabel ?? '').isEmpty
+                    ? 'Room not set'
+                    : appointment.roomLabel!,
                 style: TextStyle(fontSize: 12, color: AppColors.textMuted),
               ),
-              if (important) ...[
-                const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 3,
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      statusStyle.backgroundColor,
+                      statusStyle.borderColor,
+                    ],
                   ),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        AppColors.accentStrong.withOpacity(0.9),
-                        AppColors.accent.withOpacity(0.9),
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: const Text(
-                    'New patient',
-                    style: TextStyle(fontSize: 11, color: AppColors.bg),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color:
+                        highlight
+                            ? AppColors.accentSoft.withOpacity(0.8)
+                            : Colors.transparent,
                   ),
                 ),
-              ],
+                child: Text(
+                  appointment.status.label,
+                  style: const TextStyle(fontSize: 11, color: AppColors.bg),
+                ),
+              ),
             ],
           ),
         ],
       ),
     );
   }
+}
+
+String _dashboardVisitLabel(String value) {
+  final normalized = value.trim();
+  if (normalized.isEmpty) {
+    return 'No visit label';
+  }
+  return normalized;
+}
+
+class _DashboardAppointmentStatusStyle {
+  final Color backgroundColor;
+  final Color borderColor;
+
+  const _DashboardAppointmentStatusStyle({
+    required this.backgroundColor,
+    required this.borderColor,
+  });
+}
+
+_DashboardAppointmentStatusStyle _dashboardAppointmentStatusStyle(
+  AppointmentStatus status,
+) {
+  switch (status) {
+    case AppointmentStatus.scheduled:
+      return _DashboardAppointmentStatusStyle(
+        backgroundColor: AppColors.accentStrong.withOpacity(0.9),
+        borderColor: AppColors.accent.withOpacity(0.9),
+      );
+    case AppointmentStatus.cancelled:
+      return const _DashboardAppointmentStatusStyle(
+        backgroundColor: Color(0xFFF97316),
+        borderColor: Color(0xFFF97316),
+      );
+    case AppointmentStatus.noShow:
+      return const _DashboardAppointmentStatusStyle(
+        backgroundColor: Color(0xFFEF4444),
+        borderColor: Color(0xFFEF4444),
+      );
+  }
+}
+
+String _formatDashboardTime(DateTime value) {
+  final local = value.toLocal();
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+  return '$hour:$minute';
 }
 
 String _formatCurrency(double amount) {
@@ -1148,6 +1371,9 @@ class _WaitlistPatientsSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final screenSize = MediaQuery.sizeOf(context);
+    final isCompact = screenSize.width < 640;
+
     void openPatientProfile(WaitlistEntry patient) {
       final navigator = Navigator.of(context);
       navigator.pop();
@@ -1182,10 +1408,18 @@ class _WaitlistPatientsSheet extends StatelessWidget {
 
     return Dialog(
       backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: isCompact ? 8 : 24,
+        vertical: isCompact ? 8 : 24,
+      ),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(isCompact ? 18 : 22),
+      ),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 900, minHeight: 320),
+        constraints: BoxConstraints(
+          maxWidth: isCompact ? screenSize.width : 900,
+          minHeight: isCompact ? screenSize.height * 0.8 : 320,
+        ),
         child: Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -1206,7 +1440,7 @@ class _WaitlistPatientsSheet extends StatelessWidget {
               border: Border.all(color: Colors.white.withOpacity(0.12)),
             ),
             child: Padding(
-              padding: const EdgeInsets.all(20),
+              padding: EdgeInsets.all(isCompact ? 14 : 20),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1477,6 +1711,14 @@ class _WaitlistPatientsSheet extends StatelessWidget {
   }
 }
 
+enum _WaitlistPatientAction {
+  moveUp,
+  moveDown,
+  movePrevStage,
+  moveNextStage,
+  remove,
+}
+
 class _WaitlistPatientTile extends StatefulWidget {
   final Color accentColor;
   final int queueNumber;
@@ -1537,6 +1779,8 @@ class _WaitlistPatientTileState extends State<_WaitlistPatientTile> {
 
   @override
   Widget build(BuildContext context) {
+    final isCompact = MediaQuery.sizeOf(context).width < 560;
+
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOutCubic,
@@ -1564,80 +1808,182 @@ class _WaitlistPatientTileState extends State<_WaitlistPatientTile> {
                 ]
                 : const [],
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: widget.accentColor.withOpacity(0.15),
-            child: Text(
-              '${widget.queueNumber}',
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                color: AppColors.textPrimary,
+      child:
+          isCompact
+              ? Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildQueueAvatar(),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _WaitlistPatientInfoButton(
+                      accentColor: widget.accentColor,
+                      title: widget.title,
+                      queueLabel: 'Queue #${widget.queueNumber}',
+                      subtitle: widget.subtitle,
+                      firstPaymentDate: widget.firstPaymentDate,
+                      onTap: _handleOpenPatient,
+                      isCompact: true,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  _buildCompactActionsMenu(),
+                ],
+              )
+              : Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildQueueAvatar(),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _WaitlistPatientInfoButton(
+                      accentColor: widget.accentColor,
+                      title: widget.title,
+                      queueLabel: 'Queue #${widget.queueNumber}',
+                      subtitle: widget.subtitle,
+                      firstPaymentDate: widget.firstPaymentDate,
+                      onTap: _handleOpenPatient,
+                      isCompact: false,
+                    ),
+                  ),
+                  if (widget.onMoveUp != null || widget.onMoveDown != null) ...[
+                    const SizedBox(width: 8),
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'Move up',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: widget.onMoveUp,
+                          icon: const Icon(
+                            Icons.keyboard_arrow_up_rounded,
+                            size: 20,
+                          ),
+                          color: AppColors.textPrimary,
+                        ),
+                        IconButton(
+                          tooltip: 'Move down',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: widget.onMoveDown,
+                          icon: const Icon(
+                            Icons.keyboard_arrow_down_rounded,
+                            size: 20,
+                          ),
+                          color: AppColors.textPrimary,
+                        ),
+                      ],
+                    ),
+                  ],
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: 'Move to previous stage',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: widget.onMovePrevStage,
+                        icon: const Icon(
+                          Icons.arrow_back_ios_new_rounded,
+                          size: 16,
+                        ),
+                        color: AppColors.textPrimary,
+                      ),
+                      IconButton(
+                        tooltip: 'Move to next stage',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: widget.onMoveNextStage,
+                        icon: const Icon(
+                          Icons.arrow_forward_ios_rounded,
+                          size: 16,
+                        ),
+                        color: AppColors.textPrimary,
+                      ),
+                    ],
+                  ),
+                  IconButton(
+                    tooltip: 'Remove from waiting list',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: widget.onRemove,
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    color: Colors.redAccent.withOpacity(0.9),
+                  ),
+                ],
               ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: _WaitlistPatientInfoButton(
-              accentColor: widget.accentColor,
-              title: widget.title,
-              queueLabel: 'Queue #${widget.queueNumber}',
-              subtitle: widget.subtitle,
-              firstPaymentDate: widget.firstPaymentDate,
-              onTap: _handleOpenPatient,
-            ),
-          ),
-          if (widget.onMoveUp != null || widget.onMoveDown != null) ...[
-            const SizedBox(width: 8),
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  tooltip: 'Move up',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: widget.onMoveUp,
-                  icon: const Icon(Icons.keyboard_arrow_up_rounded, size: 20),
-                  color: AppColors.textPrimary,
-                ),
-                IconButton(
-                  tooltip: 'Move down',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: widget.onMoveDown,
-                  icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 20),
-                  color: AppColors.textPrimary,
-                ),
-              ],
-            ),
-          ],
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                tooltip: 'Move to previous stage',
-                visualDensity: VisualDensity.compact,
-                onPressed: widget.onMovePrevStage,
-                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 16),
-                color: AppColors.textPrimary,
-              ),
-              IconButton(
-                tooltip: 'Move to next stage',
-                visualDensity: VisualDensity.compact,
-                onPressed: widget.onMoveNextStage,
-                icon: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
-                color: AppColors.textPrimary,
-              ),
-            ],
-          ),
-          IconButton(
-            tooltip: 'Remove from waiting list',
-            visualDensity: VisualDensity.compact,
-            onPressed: widget.onRemove,
-            icon: const Icon(Icons.close_rounded, size: 18),
-            color: Colors.redAccent.withOpacity(0.9),
-          ),
-        ],
+    );
+  }
+
+  Widget _buildQueueAvatar() {
+    return CircleAvatar(
+      radius: 18,
+      backgroundColor: widget.accentColor.withOpacity(0.15),
+      child: Text(
+        '${widget.queueNumber}',
+        style: const TextStyle(
+          fontWeight: FontWeight.w700,
+          color: AppColors.textPrimary,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCompactActionsMenu() {
+    final items = <PopupMenuEntry<_WaitlistPatientAction>>[
+      if (widget.onMoveUp != null)
+        const PopupMenuItem(
+          value: _WaitlistPatientAction.moveUp,
+          child: Text('Move up'),
+        ),
+      if (widget.onMoveDown != null)
+        const PopupMenuItem(
+          value: _WaitlistPatientAction.moveDown,
+          child: Text('Move down'),
+        ),
+      if (widget.onMovePrevStage != null)
+        const PopupMenuItem(
+          value: _WaitlistPatientAction.movePrevStage,
+          child: Text('Previous stage'),
+        ),
+      if (widget.onMoveNextStage != null)
+        const PopupMenuItem(
+          value: _WaitlistPatientAction.moveNextStage,
+          child: Text('Next stage'),
+        ),
+      if (widget.onMoveUp != null ||
+          widget.onMoveDown != null ||
+          widget.onMovePrevStage != null ||
+          widget.onMoveNextStage != null)
+        const PopupMenuDivider(),
+      const PopupMenuItem(
+        value: _WaitlistPatientAction.remove,
+        child: Text('Remove from waiting list'),
+      ),
+    ];
+
+    return PopupMenuButton<_WaitlistPatientAction>(
+      tooltip: 'Patient actions',
+      onSelected: (action) {
+        switch (action) {
+          case _WaitlistPatientAction.moveUp:
+            widget.onMoveUp?.call();
+            break;
+          case _WaitlistPatientAction.moveDown:
+            widget.onMoveDown?.call();
+            break;
+          case _WaitlistPatientAction.movePrevStage:
+            widget.onMovePrevStage?.call();
+            break;
+          case _WaitlistPatientAction.moveNextStage:
+            widget.onMoveNextStage?.call();
+            break;
+          case _WaitlistPatientAction.remove:
+            widget.onRemove();
+            break;
+        }
+      },
+      itemBuilder: (_) => items,
+      color: AppColors.surfaceDark,
+      icon: Icon(
+        Icons.more_vert_rounded,
+        color: Colors.white.withOpacity(0.88),
       ),
     );
   }
@@ -1650,6 +1996,7 @@ class _WaitlistPatientInfoButton extends StatelessWidget {
   final String subtitle;
   final DateTime? firstPaymentDate;
   final VoidCallback onTap;
+  final bool isCompact;
 
   const _WaitlistPatientInfoButton({
     required this.accentColor,
@@ -1658,6 +2005,7 @@ class _WaitlistPatientInfoButton extends StatelessWidget {
     required this.subtitle,
     required this.firstPaymentDate,
     required this.onTap,
+    required this.isCompact,
   });
 
   @override
@@ -1668,67 +2016,51 @@ class _WaitlistPatientInfoButton extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        padding: EdgeInsets.symmetric(
+          horizontal: isCompact ? 4 : 8,
+          vertical: 6,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                ),
-                if (paymentBadge != null) ...[
-                  const SizedBox(width: 10),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 5,
-                    ),
-                    decoration: BoxDecoration(
-                      color: paymentBadge.backgroundColor,
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: paymentBadge.borderColor),
-                      boxShadow: [
-                        BoxShadow(
-                          color: accentColor.withOpacity(0.08),
-                          blurRadius: 12,
-                          spreadRadius: 0,
-                        ),
-                      ],
-                    ),
-                    child: Text(
-                      paymentBadge.label,
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: paymentBadge.textColor,
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-            if (paymentBadge != null) const SizedBox(height: 6),
             Text(
-              queueLabel,
-              style: TextStyle(
-                fontSize: 12,
-                color: AppColors.textMuted.withOpacity(0.82),
+              title,
+              maxLines: isCompact ? 2 : 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary,
               ),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                _WaitlistMetaPill(
+                  label: queueLabel,
+                  textColor: AppColors.textMuted.withOpacity(0.88),
+                  backgroundColor: Colors.white.withOpacity(0.04),
+                  borderColor: Colors.white.withOpacity(0.08),
+                ),
+                if (paymentBadge != null)
+                  _WaitlistMetaPill(
+                    label: paymentBadge.label,
+                    textColor: paymentBadge.textColor,
+                    backgroundColor: paymentBadge.backgroundColor,
+                    borderColor: paymentBadge.borderColor,
+                    shadowColor: accentColor.withOpacity(0.08),
+                  ),
+              ],
             ),
             if (subtitle.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
                   subtitle,
+                  maxLines: isCompact ? 2 : 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 12,
                     color: AppColors.textMuted.withOpacity(0.85),
@@ -1736,6 +2068,52 @@ class _WaitlistPatientInfoButton extends StatelessWidget {
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WaitlistMetaPill extends StatelessWidget {
+  final String label;
+  final Color textColor;
+  final Color backgroundColor;
+  final Color borderColor;
+  final Color? shadowColor;
+
+  const _WaitlistMetaPill({
+    required this.label,
+    required this.textColor,
+    required this.backgroundColor,
+    required this.borderColor,
+    this.shadowColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: borderColor),
+        boxShadow:
+            shadowColor == null
+                ? null
+                : [
+                  BoxShadow(
+                    color: shadowColor!,
+                    blurRadius: 12,
+                    spreadRadius: 0,
+                  ),
+                ],
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: textColor,
         ),
       ),
     );

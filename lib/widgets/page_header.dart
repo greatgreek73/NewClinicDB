@@ -18,17 +18,38 @@ class PageHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Column(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 640;
+        final action =
+            actionLabel == null || onAction == null
+                ? null
+                : TextButton.icon(
+                  onPressed: onAction,
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.textPrimary,
+                    backgroundColor: Colors.white.withOpacity(0.06),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 12,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                  ),
+                  icon: const Icon(Icons.arrow_back),
+                  label: Text(actionLabel!),
+                );
+
+        if (isCompact) {
+          return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 title,
                 style: const TextStyle(
-                  fontSize: 30,
+                  fontSize: 28,
                   fontWeight: FontWeight.w600,
                   color: AppColors.textPrimary,
                   letterSpacing: -0.4,
@@ -38,33 +59,46 @@ class PageHeader extends StatelessWidget {
               Text(
                 subtitle,
                 style: TextStyle(
-                  fontSize: 15,
+                  fontSize: 14,
                   color: AppColors.textMuted.withOpacity(0.9),
                 ),
               ),
+              if (action != null) ...[const SizedBox(height: 14), action],
             ],
-          ),
-        ),
-        if (actionLabel != null && onAction != null) ...[
-          const SizedBox(width: 16),
-          TextButton.icon(
-            onPressed: onAction,
-            style: TextButton.styleFrom(
-              foregroundColor: AppColors.textPrimary,
-              backgroundColor: Colors.white.withOpacity(0.06),
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(999),
-              ),
-              side: BorderSide(
-                color: Colors.white.withOpacity(0.2),
+          );
+        }
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 30,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                      letterSpacing: -0.4,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: AppColors.textMuted.withOpacity(0.9),
+                    ),
+                  ),
+                ],
               ),
             ),
-            icon: const Icon(Icons.arrow_back),
-            label: Text(actionLabel!),
-          ),
-        ],
-      ],
+            if (action != null) ...[const SizedBox(width: 16), action],
+          ],
+        );
+      },
     );
   }
 }
